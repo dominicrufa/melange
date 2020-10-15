@@ -49,7 +49,7 @@ def calculate_SIS_log_partition_ratio(log_weight_matrix):
     arguments
         log_weight_matrix
     """
-  from jax.scipy.special import logsumexp
-  num_particles= log_weight_matrix.shape[1]
-  out= logsumexp(log_weight_matrix.sum(0)) - jnp.log(num_particles)
-  return out
+    from jax.scipy.special import logsumexp
+    num_particles= log_weight_matrix.shape[1]
+    out= logsumexp(log_weight_matrix.sum(0)) - jnp.log(num_particles)
+    return out
