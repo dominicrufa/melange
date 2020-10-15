@@ -1,6 +1,8 @@
 """
 miscellaneous utilities
 """
+from jax import numpy as jnp
+
 def compute_log_pdf_ratio(potential_function, parameter_tm1, parameter_t, x_tm1, x_t):
     """
     return log( \gamma_{t}(x_t) / \gamma_{tm1}(x_{tm1}))
