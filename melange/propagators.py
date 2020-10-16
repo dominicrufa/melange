@@ -187,7 +187,14 @@ def log_driven_Langevin_kernel(x_tm1, x_t, potential, dt, A_function, b_function
     return logp
 
 
-def Euler_Maruyama_log_proposal_ratio(x_tm1, x_t, potential, forward_potential_parameters, backward_potential_parameters, dt):
+def Euler_Maruyama_log_proposal_ratio(x_tm1,
+                                      x_t,
+                                      forward_potential,
+                                      forward_potential_parameters,
+                                      forward_dt,
+                                      backward_potential,
+                                      backward_potential_parameters,
+                                      backward_dt):
     """
     compute log(L_{t-1}(x_t, x_{t-1})) - log(K_t(x_{t-1}, x_t))
     for EL kernels
@@ -197,30 +204,36 @@ def Euler_Maruyama_log_proposal_ratio(x_tm1, x_t, potential, forward_potential_p
             previous iteration position (of dimension N)
         x_t : jnp.array(N)
             current iteration positions (of dimension N)
-        potential : function
-            potential function
+        forward_potential : function
+            forward kernel potential function
         forward_potential_parameters : jnp.array(Q)
             forward kernel parameter
-        backward_potential_parameters : jnp.array(R)
+        forward_dt : float
+            forward kernel time increment
+        backward_potential : function
+            backward kernel potential function
+        backward_potential_parameters : jnp.array(Q)
             backward kernel parameter
-        dt : float
-            time increment
+        backward_dt : float
+            backward kernel time increment
 
     returns
         out : float
             log ratio of the backward-to-forward proposal
     """
-    logK = log_Euler_Maruyma_kernel(x_tm1, x_t, potential, forward_potential_parameters, dt)
-    logL = log_Euler_Maruyma_kernel(x_t, x_tm1, potential, backward_potential_parameters, dt)
+    logK = log_Euler_Maruyma_kernel(x_tm1, x_t, forward_potential, forward_potential_parameters, forward_dt)
+    logL = log_Euler_Maruyma_kernel(x_t, x_tm1, forward_potential, backward_potential_parameters, backward_dt)
     return logL - logK
 
 def driven_Langevin_log_proposal_ratio(x_tm1,
                                       x_t,
-                                      potential,
-                                      dt,
+                                      forward_potential,
+                                      backward_potential,
+                                      forward_dt,
+                                      backward_dt,
                                       A_function,
                                       b_function,
-                                      potential_parameter,
+                                      forward_potential_parameter,
                                       backward_potential_parameter,
                                       A_parameter,
                                       b_parameter):
@@ -230,15 +243,19 @@ def driven_Langevin_log_proposal_ratio(x_tm1,
             previous iteration position (of dimension N)
         x_t : jnp.array(N)
             current iteration positions (of dimension N)
-        potential : function
-            potential function
-        dt : float
-            time increment
+        forward_potential : function
+            forward kernel potential function
+        backward_potential : function
+            backward kernel potential function
+        forward_dt : float
+            forward kernel time increment
+        backward_dt : float
+            backward kernel time increment
         A_function : function
             variance_controlling function
         b_function : function
             mean_controlling function
-        potential_parameter : jnp.array(Q)
+        forward_potential_parameter : jnp.array(Q)
             second argument to potential function
         backward_potential_parameter : jnp.array(R)
             backward kernel parameter
@@ -253,8 +270,8 @@ def driven_Langevin_log_proposal_ratio(x_tm1,
 
 
     """
-    logK = log_driven_Langevin_kernel(x_tm1, x_t, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
-    logL = log_Euler_Maruyma_kernel(x_t, x_tm1, potential, backward_potential_parameter, dt)
+    logK = log_driven_Langevin_kernel(x_tm1, x_t, forward_potential, forward_dt, A_function, b_function, forward_potential_parameter, A_parameter, b_parameter)
+    logL = log_Euler_Maruyma_kernel(x_t, x_tm1, backward_potential, backward_potential_parameter, backward_dt)
     return logL - logK
 
 def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):

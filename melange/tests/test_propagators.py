@@ -87,10 +87,12 @@ def test_1d_kernel_consistency(key = random.PRNGKey(0)):
     EM_propagator, EM_kernel = generate_Euler_Maruyama_propagators()
     driven_propagator, driven_kernel = generate_driven_Langevin_propagators()
 
-    EM_logp_ratio = Euler_Maruyama_log_proposal_ratio(xs[0], xs[1], potential, forward_potential_parameters, backward_potential_parameters, dt)
+    EM_logp_ratio = Euler_Maruyama_log_proposal_ratio(xs[0], xs[1], potential, forward_potential_parameters, dt, potential, backward_potential_parameters, dt)
     driven_logp_ratio = driven_Langevin_log_proposal_ratio(xs[0],
                                       xs[1],
                                       potential,
+                                      potential,
+                                      dt,
                                       dt,
                                       A,
                                       b,
