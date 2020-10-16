@@ -303,7 +303,7 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
         dts = jnp.array([dt]*sequence_length)
     else:
         dts = jnp.array(dt)
-        assert len(dts) == sequence_length
+    assert len(dts) == sequence_length
 
     # args for ULA_move are : (x, potential, dt, key, potential_parameter)
     vmap_ULA_move = vmap(ULA_move, in_axes=(0, None, None, 0, None))
