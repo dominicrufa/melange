@@ -274,7 +274,7 @@ def driven_Langevin_log_proposal_ratio(x_tm1,
     logL = log_Euler_Maruyma_kernel(x_t, x_tm1, backward_potential, backward_potential_parameter, backward_dt)
     return logL - logK
 
-def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
+def forward_ULA_sampler(xs, potential, dts, key, potential_parameters):
     """
     conduct forward sampling
 
@@ -283,7 +283,7 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
             positions (or latent variables) of starting positions (M particles with dimension N)
         potential : function
             potential function (takes args x and parameters)
-        dt : float or jnp.array
+        dts : float or jnp.array
             incremental time; if jnp.array, must be same dimension as `potential_parameters`
         key : float
             randomization key
@@ -299,7 +299,7 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
     num_particles, dimension = xs.shape
     sequence_length = len(potential_parameters)
 
-    dts = jnp.array([dt]*sequence_length) if type(dt) == float else dt
+    dts = jnp.array([dts]*sequence_length) if type(dts) == float
     assert len(dts) == sequence_length
 
     # args for ULA_move are : (x, potential, dt, key, potential_parameter)
