@@ -266,8 +266,8 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
             positions (or latent variables) of starting positions (M particles with dimension N)
         potential : function
             potential function (takes args x and parameters)
-        dt : float
-            incremental time
+        dt : float or jnp.array
+            incremental time; if jnp.array, must be same dimension as `potential_parameters`
         key : float
             randomization key
         potential_parameters : jnp.array
@@ -282,20 +282,26 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
     num_particles, dimension = xs.shape
     sequence_length = len(potential_parameters)
 
+    if type(dt) == float:
+        dts = jnp.array([dt]*sequence_length)
+    else:
+        assert len(dts) == sequence_length
+
     # args for ULA_move are : (x, potential, dt, key, potential_parameter)
     vmap_ULA_move = vmap(ULA_move, in_axes=(0, None, None, 0, None))
 
-    def ULA_scan(in_xs_and_key, propagation_parameter):
+    def ULA_scan(in_xs_and_key, t):
         in_xs, key = in_xs_and_key
+        run_dt, propagation_parameter = dts[t], potential_parameters[t]
         key_folder = random.split(key, num_particles+1)
         out_key, run_key = key_folder[0], key_folder[1:]
         # args for ULA_move are : (x, potential, dt, key, potential_parameter)
         assert len(run_key) == len(in_xs)
-        out_xs = vmap_ULA_move(in_xs, potential, dt, run_key, propagation_parameter)
+        out_xs = vmap_ULA_move(in_xs, potential, run_dt, run_key, propagation_parameter)
         return (out_xs, out_key), out_xs
     key, init_run_key = random.split(key)
     init = (xs, init_run_key)
-    _, trajectories = scan(ULA_scan, init, potential_parameters)
+    _, trajectories = scan(ULA_scan, init, jnp.arange(sequence_length))
     return trajectories
 
 def forward_driven_diffusion_sampler(xs,
@@ -345,7 +351,7 @@ def forward_driven_diffusion_sampler(xs,
         A_parameter, b_parameter = A_parameters[iteration] , b_parameters[iteration]
         out_xs = vmap_driven_move(in_xs, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter, run_keys)
         return out_xs, out_xs
-        
+
     _, trajectories = scan(driven_scan, xs, sequence_counter)
     return trajectories
 
