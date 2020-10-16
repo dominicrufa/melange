@@ -124,7 +124,7 @@ def test_forward_ULA_driven_samplers(key = random.PRNGKey(0)):
   og_mean, og_variance = xs.mean(), xs.var()
   #print(og_mean, og_variance)
 
-  ULA_trajs = forward_ULA_sampler(xs, potential, dt, key, potential_parameters)
+  ULA_trajs = forward_ULA_sampler(xs, potential, jnp.array([dt]*len(potential_parameters)), key, potential_parameters)
   #print(ULA_trajs[-1].mean(), ULA_trajs[-1].var())
 
   driven_trajs = forward_driven_diffusion_sampler(xs, potential, dt, key, A, b, potential_parameters, A_parameters, b_parameters)
