@@ -299,10 +299,7 @@ def forward_ULA_sampler(xs, potential, dt, key, potential_parameters):
     num_particles, dimension = xs.shape
     sequence_length = len(potential_parameters)
 
-    if type(dt) == float:
-        dts = jnp.array([dt]*sequence_length)
-    else:
-        dts = jnp.array(dt)
+    dts = jnp.array([dt]*sequence_length) if type(dt) == float else dt
     assert len(dts) == sequence_length
 
     # args for ULA_move are : (x, potential, dt, key, potential_parameter)
