@@ -28,6 +28,7 @@ def EL_mu_sigma(x, potential, dt, parameters):
             covariance matrix
     """
     tau = dt/2.
+    assert len(parameters) == 3
     force = -grad(potential)(x, parameters)
     mu = x + tau * force
     Sigma = 2*tau*jnp.eye(len(x))
