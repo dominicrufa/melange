@@ -28,7 +28,6 @@ def EL_mu_sigma(x, potential, dt, parameters):
             covariance matrix
     """
     tau = dt/2.
-    assert len(parameters) == 3
     force = -grad(potential)(x, parameters)
     mu = x + tau * force
     Sigma = 2*tau*jnp.eye(len(x))
@@ -222,7 +221,6 @@ def Euler_Maruyama_log_proposal_ratio(x_tm1,
         out : float
             log ratio of the backward-to-forward proposal
     """
-    assert len(forward_potential_parameters) == 3
     logK = log_Euler_Maruyma_kernel(x_tm1, x_t, forward_potential, forward_potential_parameters, forward_dt)
     logL = log_Euler_Maruyma_kernel(x_t, x_tm1, backward_potential, backward_potential_parameters, backward_dt)
     return logL - logK
