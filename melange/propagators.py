@@ -221,8 +221,8 @@ def Euler_Maruyama_log_proposal_ratio(x_tm1,
         out : float
             log ratio of the backward-to-forward proposal
     """
+    print(f"forward function, params: {forward_potential, forward_potential_parameters}")
     logK = log_Euler_Maruyma_kernel(x_tm1, x_t, forward_potential, forward_potential_parameters, forward_dt)
-    print(f"log EL bkwd: {backward_potential}")
     logL = log_Euler_Maruyma_kernel(x_t, x_tm1, backward_potential, backward_potential_parameters, backward_dt)
     return logL - logK
 
