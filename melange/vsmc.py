@@ -5,6 +5,7 @@ variational Sequential Monte Carlo utilities
 from jax.scipy.special import logsumexp
 from jax.lax import scan, stop_gradient
 from jax import grad, vmap
+from jax import numpy as jnp
 
 def compute_log_weights(trajectories,
                         ipotential,
@@ -41,7 +42,6 @@ def compute_log_weights(trajectories,
     """
     from melange.miscellaneous import compute_log_pdf_ratio
     from melange.propagators import log_Euler_Maruyma_kernel
-    import jax.numpy as jnp
 
     T,N,dim = trajectories.shape
     vcompute_log_pdf_ratio = vmap(compute_log_pdf_ratio, in_axes=(None, None, None, 0,0))
@@ -50,7 +50,6 @@ def compute_log_weights(trajectories,
     batched_potential = vmap(ipotential, in_axes=(0,None)) #for initial weight calculation
 
     def weight_scanner(prev_log_normalized_weights, t):
-        import jax.numpy as jnp
         xs_tm1, xs_t = trajectories[t-1], trajectories[t]
         forward_dt = iforward_dts[t]
         backward_dt = ibackward_dts[t-1]
