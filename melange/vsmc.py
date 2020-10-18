@@ -64,7 +64,6 @@ def compute_log_weights(trajectories,
         kernel_logps = logL - logK
         log_weights = prev_log_normalized_weights + jnp.log(N) + potential_logps + kernel_logps
         return stop_gradient(log_weights - logsumexp(log_weights)), log_weights
-        #return log_weights - logsumexp(log_weights), log_weights
 
     ts = jnp.arange(1,T)
     #init_log_weights = -batched_potential(trajectories[0], potential_parameters[0]) + batched_forward_potential(trajectories[0], forward_potential_parameters[0])
