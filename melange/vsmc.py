@@ -43,6 +43,8 @@ def compute_log_weights(trajectories,
     from melange.miscellaneous import compute_log_pdf_ratio
     from melange.propagators import log_Euler_Maruyma_kernel
 
+    ref = jnp.zeros(3)
+
     T,N,dim = trajectories.shape
     vcompute_log_pdf_ratio = vmap(compute_log_pdf_ratio, in_axes=(None, None, None, 0,0))
     vEuler_Maruyama_kernel = vmap(log_Euler_Maruyma_kernel, in_axes=(0, 0, None, None, None))
