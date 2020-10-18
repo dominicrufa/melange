@@ -60,6 +60,7 @@ def compute_log_weights(trajectories,
                                              ipotential_parameters[t],
                                              xs_tm1,
                                              xs_t)
+        ref = jnp.zeros(3)
         logL = vEuler_Maruyama_kernel(xs_t, xs_tm1, ibackward_potential, ibackward_potential_parameters[t-1], backward_dt[t-1])
         logK = vEuler_Maruyama_kernel(xs_tm1, xs_t, iforward_potential, iforward_potential_parameters[t], forward_dt)
         kernel_logps = logL - logK
