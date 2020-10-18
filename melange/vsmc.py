@@ -63,14 +63,14 @@ def compute_log_weights(trajectories,
         logK = vEuler_Maruyama_kernel(xs_tm1, xs_t, iforward_potential, iforward_potential_parameters[t], forward_dt)
         kernel_logps = logL - logK
         log_weights = prev_log_normalized_weights + jnp.log(N) + potential_logps + kernel_logps
-        #return stop_gradient(log_weights - logsumexp(log_weights)), log_weights
-        return log_weights - logsumexp(log_weights), log_weights
+        return stop_gradient(log_weights - logsumexp(log_weights)), log_weights
+        #return log_weights - logsumexp(log_weights), log_weights
 
     ts = jnp.arange(1,T)
     #init_log_weights = -batched_potential(trajectories[0], potential_parameters[0]) + batched_forward_potential(trajectories[0], forward_potential_parameters[0])
     init_log_weights = jnp.zeros(N)
-    #init_log_norm_weights = stop_gradient(init_log_weights - logsumexp(init_log_weights))
-    init_log_norm_weights = init_log_weights - logsumexp(init_log_weights)
+    init_log_norm_weights = stop_gradient(init_log_weights - logsumexp(init_log_weights))
+    #init_log_norm_weights = init_log_weights - logsumexp(init_log_weights)
     _, log_weight_matrix = scan(weight_scanner, init_log_norm_weights, ts)
     return jnp.vstack((init_log_weights, log_weight_matrix))
 
