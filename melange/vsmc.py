@@ -59,16 +59,18 @@ def compute_log_weights(trajectories,
                                              ipotential_parameters[t],
                                              xs_tm1,
                                              xs_t)
-        logL = vEuler_Maruyama_kernel(xs_t, xs_tm1, ibackward_potential, ibackward_potential_parameters[t-1], backward_dt[t-1])
+        logL = vEuler_Maruyama_kernel(xs_t, xs_tm1, ibackward_potential, ibackward_potential_parameters[t-1], backward_dt)
         logK = vEuler_Maruyama_kernel(xs_tm1, xs_t, iforward_potential, iforward_potential_parameters[t], forward_dt)
         kernel_logps = logL - logK
         log_weights = prev_log_normalized_weights + jnp.log(N) + potential_logps + kernel_logps
-        return stop_gradient(log_weights - logsumexp(log_weights)), log_weights
+        #return stop_gradient(log_weights - logsumexp(log_weights)), log_weights
+        return log_weights - logsumexp(log_weights), log_weights
 
     ts = jnp.arange(1,T)
     #init_log_weights = -batched_potential(trajectories[0], potential_parameters[0]) + batched_forward_potential(trajectories[0], forward_potential_parameters[0])
     init_log_weights = jnp.zeros(N)
-    init_log_norm_weights = stop_gradient(init_log_weights - logsumexp(init_log_weights))
+    #init_log_norm_weights = stop_gradient(init_log_weights - logsumexp(init_log_weights))
+    init_log_norm_weights = init_log_weights - logsumexp(init_log_weights)
     _, log_weight_matrix = scan(weight_scanner, init_log_norm_weights, ts)
     return jnp.vstack((init_log_weights, log_weight_matrix))
 
@@ -89,3 +91,44 @@ def mod_log_partition_ratio(log_weight_matrix):
 
     _, logZ_incs = scan(logZ_scanner, None, log_weight_matrix)
     return logZ_incs.sum()
+
+def ULA_vSMC(num_particles,
+                       potential,
+                       potential_parameters,
+                       forward_potential,
+                       forward_potential_parameters,
+                       forward_dts,
+                       backward_potential,
+                       backward_potential_parameters,
+                       backward_dts,
+                       starter_key,
+                       mu,
+                       cov):
+    """
+    arguments
+        num_particles : int
+            number of particles in the sampler
+        potential : function
+            potential function
+        forward_potential : function
+            potential function of forward kernel
+        forward_potential_parameters : jnp.array(T,Q)
+            array of terms that parameterize the forward potential
+        forward_dts : jnp.array(T)
+            array of timestep sizes
+        backward_potential : function
+            potential function of backward kernel
+        backward_potential_parameters : jnp.array(T-1, R)
+            array of terms that parameterize the backward potential
+        backward_dts : jnp.array(T-1)
+            array of timestep sizes
+        starter_key : jax.random.PRNGKey
+            key to initialize the ULA process
+        mu : jnp.array(D)
+            mean of initial gaussian proposal
+        cov : jnp.array(D,D)
+            covariance matrix of initial gaussian proposal
+
+    returns
+    """
+    pass
