@@ -50,6 +50,7 @@ def compute_log_weights(trajectories,
     batched_potential = vmap(ipotential, in_axes=(0,None)) #for initial weight calculation
 
     def weight_scanner(prev_log_normalized_weights, t):
+        from jax import numpy as jnp
         xs_tm1, xs_t = trajectories[t-1], trajectories[t]
         forward_dt = iforward_dts[t]
         backward_dt = ibackward_dts[t-1]
