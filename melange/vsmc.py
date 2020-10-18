@@ -5,6 +5,7 @@ variational Sequential Monte Carlo utilities
 from jax.scipy.special import logsumexp
 from jax.lax import scan, stop_gradient
 from jax import grad, vmap
+import jax.numpy as jnp
 
 def compute_log_weights(trajectories,
                         ipotential,
