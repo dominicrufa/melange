@@ -6,18 +6,6 @@ from jax import random, vmap, grad
 import numpy as np
 from jax.lax import stop_gradient
 
-class BaseSMCReporter(object):
-    """
-    generalized reporter object for SMC
-    """
-    def __init__(self, smc_obj, save_Xs=True):
-        self.X = np.zeros((smc_obj.T, smc_obj.N, smc_obj.Dx))
-        self.ESS = np.zeros(smc_obj.T)
-        self.logW = np.zeros(smc_obj.T,smc_obj.N)
-    def report(self, t, X, logW):
-        self.X[t] = X
-        self.logW[t] = logW
-
 class BaseSMCObject(object):
     """
     base class for SMC
