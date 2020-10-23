@@ -76,7 +76,7 @@ def SMC(prop_params, model_params, y, rs, init_params, prop_fn, logW_fn, init_fn
 
     #initialize
     rs, init_rs = random.split(rs) #split the rs
-    X0 = init_X_fn(prop_params, init_rs, init_params) #initialize N Xs with the random seed and the propagation parameters
+    X0 = init_Xs_fn(prop_params, init_rs, init_params) #initialize N Xs with the random seed and the propagation parameters
     potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts = prop_params #split the prop params
     init_logWs = init_logW_fn(X0, prop_params) #initialize the logWs
     logZ = 0. #initialize the logZ
@@ -104,7 +104,7 @@ def SMC(prop_params, model_params, y, rs, init_params, prop_fn, logW_fn, init_fn
 
         return (X, logW, logZ, rs), X #return positions, logW, logZ, randoms, and the Xs to collect
 
-    (out_X, out_logW, out_logZ, rs), out_Xs = scan(scanner, (X, logW, logZ, rs), jnp.arange(1,T)) #run scan
+    (out_X, out_logW, out_logZ, rs), out_Xs = scan(scanner, (X, init_logWs, logZ, rs), jnp.arange(1,T)) #run scan
     return out_logZ, jnp.vstack((X0[jnp.newaxis, ...], out_Xs)) # return the final logZ, and the stacked positions
 
 def vSMC_lower_bound(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns):
