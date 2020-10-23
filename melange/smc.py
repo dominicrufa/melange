@@ -1,16 +1,24 @@
 """
 smc managers
 """
-from jax import random
+from jax import random, jit
 from jax import numpy as jnp
-from jax.lax import stop_gradient, fori_loop
+from jax.lax import stop_gradient, scan, cond
 from jax.scipy.special import logsumexp
 import numpy as np
+from melange.reporters import BaseSMCReporter
+import jax
 
 def resampling(w, rs):
     """
     Stratified resampling with "stop_gradient" to ensure autograd
     takes no derivatives through it.
+
+    arguments
+        w : jnp.array(N)
+            particle weights
+        rs : jax.random.PRNGKey
+            random key
     """
     N = w.shape[0]
     bins = jnp.cumsum(w)
@@ -19,86 +27,154 @@ def resampling(w, rs):
 
     return stop_gradient(jnp.digitize(u, bins))
 
-def vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params, verbose=False, adapt_resamp=False, reporter=None):
+def nESS(logW):
     """
-    Estimate the VSMC lower bound. Amenable to (biased) reparameterization
-    gradients.
-    .. math::
-        ELBO(\theta,\lambda) =
-        \mathbb{E}_{\phi}\left[\nabla_\lambda \log \hat p(y_{1:T}) \right]
+    compute a normalized effective sample size
 
-    Requires an SMC object with 2 member functions:
-    -- sim_prop(t, x_{t-1}, y, prop_params, model_params, rs)
-    -- log_weights(t, x_t, x_{t-1}, y, prop_params, model_params)
+    arguments
+        logW : jnp.array(N)
+            log particle weights
     """
+    N = len(logW)
+    return 1./jnp.sum(jnp.exp(logW - logsumexp(logW))**2)/N
 
-    #handle adaptive resampling
-    if type(adapt_resamp) == float:
-        adapt_resamp=True
-        ESS_threshold=adapt_resamp
-    else:
-        ESS_threshold=None
 
-    #handle reporter
-    report = True if reporter is not None else False
+def SMC(prop_params, model_params, y, rs, init_params, prop_fn, logW_fn, init_fns):
+    """
+    conduct SMC (with stratified resampling) and return logZ, Xs
 
-    # Extract constants
+    arguments
+        prop_params : pytree
+            propagation parameters passed to the prop_fn
+        model_params : pytree
+            model parameters passed to the prop_fn
+        y : jnp.array(T, R)
+            data of sequence T, dimension R
+        rs : jax.random.PRNGKey
+            random key
+        init_params : pytree
+            initialization params passed to init_fns[0]
+        prop_fn : function
+            propagation function
+        logW_fn : function
+            compute the log weights of particles
+        init_fns : tuple
+            init_Xs_fn : function
+                initialize Xs
+            init_logW_fn : function
+                initialize logW
+
+    returns
+        out_logZ : float
+            log normalization
+        latents : jnp.array(T,N,Dx)
+            latent variable trajectories
+    """
     T = y.shape[0]
-    Dx = smc_obj.Dx
-    N = smc_obj.N
 
-    # Initialize SMC
-    rs, init_rs = random.split(rs)
-    X, logW = smc_obj.initialize(prop_params, init_rs, init_params)
-    max_logW = jnp.max(logW)
-    Xp = X
-    W = jnp.exp(logW - logsumexp(logW))
-    logZ = 0.
-    ESS = 1./jnp.sum(W**2)/N
+    init_Xs_fn, init_logW_fn = init_fns #separate the X initilaizer and logW initializer
 
-    if report:
-        reporter.report(0, (X, logZ, ESS))
+    #initialize
+    rs, init_rs = random.split(rs) #split the rs
+    X0 = init_X_fn(prop_params, init_rs, init_params) #initialize N Xs with the random seed and the propagation parameters
+    potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts = prop_params #split the prop params
+    init_logWs = init_logW_fn(X0, prop_params) #initialize the logWs
+    logZ = 0. #initialize the logZ
+    X = X0 #set X to the init positions
+    N = len(init_logWs)
 
-    for t in jnp.arange(1,T):
-        # Resampling
-        if adapt_resamp:
-            if ESS < ESS_threshold:
-                rs, resample_rs = random.split(rs)
-                ancestors = resampling(W, resample_rs)
-                Xp = X[ancestors]
-                logZ = logZ + max_logW + jnp.log(jnp.sum(W)) - jnp.log(N)
-                logW = jnp.zeros(N)
-            else:
-                Xp = X
-        else:
-            if t > 0:
-                rs, resample_rs = random.split(rs)
-                ancestors = resampling(W, resample_rs)
-                Xp = X[ancestors]
-            else:
-                Xp = X
+    def scanner(carry, t): #build a scanner
+        X, logW, logZ, rs = carry #separate the carrier
+        rs, resample_rs = random.split(rs) #split the randoms to resample
 
-        # Propagation
-        rs, prop_rs = random.split(rs)
-        X = smc_obj.sim_prop(t, Xp, y, prop_params, model_params, prop_rs)
+        # resample
+        W = jnp.exp(logW - logsumexp(logW)) #define the works
+        ancestors = resampling(W, resample_rs) #take ancestors and resample
+        Xp = X[ancestors] #resample
 
-        # Weighting
-        if adapt_resamp:
-            logW = logW + smc_obj.log_weights(t, X, Xp, y, prop_params, model_params)
-        else:
-            logW = smc_obj.log_weights(t, X, Xp, y, prop_params, model_params)
+        # Propagate
+        rs, prop_rs = random.split(rs) # split the randoms to propagate
+        X = prop_fn(t, Xp, y, prop_params, model_params, prop_rs) #propagate with the resampled particles
 
-        max_logW = jnp.max(logW)
-        W = jnp.exp(logW-max_logW)
-        if adapt_resamp:
-            if t == T-1:
-                logZ = logZ + max_logW + jnp.log(jnp.sum(W)) - jnp.log(N)
-        else:
-            logZ = logZ + max_logW + jnp.log(jnp.sum(W)) - jnp.log(N)
-        W = W / jnp.sum(W)
-        ESS = 1./jnp.sum(W**2)/N
+        # weighting
+        logW = logW_fn(t, Xp, X, y, prop_params, model_params) #define the log weights
 
-        if report:
-            reporter.report(t, (X, logZ, ESS))
+        # Update logZ, ESS
+        logZ = logZ + logsumexp(logW) - jnp.log(N) #update the logZ
 
+        return (X, logW, logZ, rs), X #return positions, logW, logZ, randoms, and the Xs to collect
+
+    (out_X, out_logW, out_logZ, rs), out_Xs = scan(scanner, (X, logW, logZ, rs), jnp.arange(1,T)) #run scan
+    return out_logZ, jnp.vstack((X0[jnp.newaxis, ...], out_Xs)) # return the final logZ, and the stacked positions
+
+def vSMC_lower_bound(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns):
+    """
+    conduct SMC (with stratified resampling) and return logZ
+    """
+    logZ, Xs = SMC(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns)
     return logZ
+
+def SIS(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns):
+    """
+    conduct sequential importance sampling (no resampling) and return Xs, logWs
+    """
+    T = y.shape[0]
+
+    init_Xs_fn, init_logW_fn = init_fns
+
+    #make trajs
+    Xs = generate_trajs(prop_params, model_params, y, rs, init_params, init_Xs_fn, prop_fn)
+
+    #make cum weight matrix
+    logWs = SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn)
+
+    return Xs, logWs
+
+def vSIS_lower_bound(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns):
+    """
+    conduct sequential importance sampling (no resampling) and return logZ
+    """
+    T = y.shape[0]
+
+    init_Xs_fn, init_logW_fn = init_fns
+
+    #make trajs
+    Xs = generate_trajs(prop_params, model_params, y, rs, init_params, init_Xs_fn, prop_fn)
+
+    #make cum weight matrix
+    logWs = SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn)
+    N = logWs.shape[1]
+
+    return logsumexp(logWs[-1,:]) - jnp.log(N)
+
+def generate_trajs(prop_params, model_params, y, rs, init_params, init_X_fn, prop_fn):
+    """
+    generate trajectories of length T, N
+    """
+    T = y.shape[0]
+
+    #initialize
+    rs, init_rs = random.split(rs)
+    X0 = init_X_fn(prop_params, init_rs, init_params)
+
+    def scanner(carry, t):
+        Xp, rs = carry
+        rs, run_rs = random.split(rs)
+        X = prop_fn(t, Xp, y, prop_params, model_params, run_rs)
+        return (X, rs), X
+
+    _, Xs = scan(scanner, (X0, rs), jnp.arange(1,T))
+    return jnp.vstack((X0[jnp.newaxis, ...], Xs))
+
+def SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn):
+    """compute the logW of an ensemble of SIS trajectories"""
+    T,N,Dx = Xs.shape
+    potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts = prop_params
+
+    init_logWs = init_logW_fn(Xs[0], prop_params)
+    def scanner(none, t):
+        Xp, Xc = Xs[t-1], Xs[t]
+        return None, logW_fn(t, Xp, Xc, y, prop_params, model_params)
+
+    _, logW_matrix = scan(scanner, None, jnp.arange(1,T))
+    return jnp.cumsum(jnp.vstack((init_logWs, logW_matrix)), axis=0)

@@ -83,7 +83,7 @@ def get_nondefault_potential_initializer(dimension):
     return potential, (mu, cov), dG
 
 def checker_function(value, tolerance):
-    if value > -tolerance and value < tolerance:
+    if abs(value) < tolerance:
         return True
     else:
         return False

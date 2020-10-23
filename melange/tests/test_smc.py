@@ -2,20 +2,22 @@
 test smc and smc_objects
 """
 from jax import random, grad
+from jax.scipy.special import logsumexp
 from jax import numpy as jnp
+from jax import jit
 
 def test_ULA_vSMC_lower_bound():
     """
-    test the unadjusted langevin algorithm vSMC lower bound in the near-ais regime (one-dimension) with full resampling _and_ adaptive resampling (nESS threshold of 0.5). the True ELBO must be within 0.05 log units
+    test the unadjusted langevin algorithm vSMC lower bound in the near-ais regime (one-dimension) with full resampling _and_ adaptive resampling (nESS threshold of 0.5). the True ELBO must be within 0.1 log units
     """
     from melange.smc_objects import StaticULA
-    from melange.smc import vsmc_lower_bound
+    from melange.smc import vsmc_lower_bound, adapt_vsmc_lower_bound, SIS, og_vsmc_lower_bound, SIS_logZ
     from melange.tests.utils import get_nondefault_potential_initializer
     from melange.tests.utils import checker_function
     from melange.reporters import vSMCReporter
 
-    T = 10
-    N=100
+    T = 100
+    N=248
     Dx=1
     potential, (mu, cov), dG = get_nondefault_potential_initializer(1)
     potential=potential
@@ -25,8 +27,6 @@ def test_ULA_vSMC_lower_bound():
     #make smc object
     smc_obj = StaticULA(T, N, Dx, potential, forward_potential, backward_potential)
 
-    #make a reporter
-    reporter_obj = vSMCReporter(T, N, Dx, save_Xs=True)
 
     #make propagation parameters
     potential_params = jnp.linspace(0,1,T)[..., jnp.newaxis]
@@ -41,8 +41,21 @@ def test_ULA_vSMC_lower_bound():
     init_params = (mu, cov, False)
     rs = random.PRNGKey(0)
 
+    reporter = vSMCReporter(T, N, Dx, save_Xs=False)
+
     #check the logZ
-    logZ = vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params, verbose=False, adapt_resamp=False, reporter=reporter_obj)
-    adapt_logZ = vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params, verbose=False, adapt_resamp=0.5)
-    checker_function(logZ - dG, 0.05)
-    checker_function(logZ - dG, 0.05)
+    logZ = vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params)
+    adapt_logZ = adapt_vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params, nESS_threshold=0.0)
+    SIS_logZ = SIS(prop_params, model_params, y, smc_obj, rs, init_params, reporter)
+    og_logZ = og_vsmc_lower_bound(prop_params, model_params, y, smc_obj, rs, init_params)
+    #ref_logZ = SIS_logZ(reporter.X, prop_params, model_params, y, smc_obj, init_params)
+
+    print(f"true dG: {dG}")
+    print(f"logZ: {logZ}; adapt_logZ: {adapt_logZ}")
+    print(f"SIS logZ: {SIS_logZ}; og_logZ: {og_logZ}")
+
+    tolerance=0.1
+    assert checker_function(logZ - dG, tolerance)
+    assert checker_function(adapt_logZ - dG, tolerance)
+    assert checker_function(SIS_logZ - dG, tolerance)
+    return reporter
