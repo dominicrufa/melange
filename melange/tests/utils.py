@@ -3,6 +3,8 @@ miscellaneous utilities
 """
 from jax import numpy as jnp
 import numpy as np
+import jax
+from jax.lax import scan
 
 def default_potential(pos, parameter): #define the potential
     """

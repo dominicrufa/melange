@@ -55,3 +55,54 @@ def calculate_SIS_log_partition_ratio(log_weight_matrix):
     num_particles= log_weight_matrix.shape[1]
     out= logsumexp(log_weight_matrix.sum(0)) - jnp.log(num_particles)
     return out
+
+def log_twisted_psi_t(Xp, Xc, A_fn, b_fn, A_params, b_params):
+    """
+    compute the log twisting psi value
+
+    arguments
+        Xp : jnp.array(N)
+            previous positions
+        Xc : jnp.array(N)
+            current positions
+        A_fn : function
+            matrix twisting function
+        b_fn : function
+            vector twisting function
+        A_params : jnp.array(Q)
+            params as argument 1 to A_fn
+        b_params : jnp.array(R)
+            params as argument 1 to b_fn
+
+    returns
+        log_psi : float
+            log of twist function
+    """
+    term1 = -jnp.dot(jnp.dot(Xc, A_fn(Xc, A_params)), Xc)
+    term2 = -jnp.dot(Xc, b_fn(Xp, b_params))
+    return term1 + term2
+
+def log_twisted_psi0(X0, A0, b0):
+    """
+    compute the log twisting psi value at t=0
+
+    arguments
+        X0 : jnp.array(N)
+            starting positions
+        A0 : jnp.array(N,N)
+            twisting matrix
+        b0 : jnp.array(N)
+            twisting vector
+    returns
+        out : float
+            log_twisted_psi0
+    """
+    return -jnp.dot(jnp.dot(X0,A0),X0) - jnp.dot(X0, b0)
+
+def exp_normalize(logWs):
+    """
+    compute an array of weights given an array of log weights
+    """
+    b = logWs.max()
+    y = jnp.exp(logWs - b)
+    return y / y.sum()

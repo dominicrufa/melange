@@ -90,12 +90,13 @@ def driven_Langevin_parameters(x, potential, dt, A_function, b_function, potenti
     f_t = x + tau * force
 
     #compute theta_t
-    theta_t = jnp.linalg.inv(jnp.eye(dimension) + 2*dt * A_function(x, A_parameter)) #must be positive definite
+    _A = A_function(x, A_parameter)
+    theta_t = jnp.linalg.inv(jnp.eye(dimension) + 2*dt * _A) #must be positive definite
     #compute mu
-    mu = jnp.matmul(theta_t, f_t - dt*b_function(x, b_parameter))
-    #compute cov
-    cov = dt*theta_t
-    return mu, cov
+    # mu = jnp.matmul(theta_t, f_t - dt*b_function(x, b_parameter))
+    # #compute cov
+    # cov = dt*theta_t
+    return _A, b_function(x, b_parameter), f_t, theta_t
 
 
 def driven_Langevin_move(x, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter, key):
@@ -129,7 +130,8 @@ def driven_Langevin_move(x, potential, dt, A_function, b_function, potential_par
         out : jnp.array(N)
             multivariate gaussian proposal
     """
-    mu, cov = driven_Langevin_parameters(x, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
+    A, b, f, theta = driven_Langevin_parameters(x, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
+    mu, cov = driven_mu_cov(b, f, theta, dt)
     return random.multivariate_normal(key, mu, cov)
 
 def log_Euler_Maruyma_kernel(x_tm1, x_t, potential, potential_parameters, dt):
@@ -182,7 +184,8 @@ def log_driven_Langevin_kernel(x_tm1, x_t, potential, dt, A_function, b_function
         logp : float
             log probability
     """
-    mu, cov = driven_Langevin_parameters(x_tm1, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
+    A, b, f, theta = driven_Langevin_parameters(x_tm1, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
+    mu, cov = driven_mu_cov(b, f, theta, dt)
     logp = multivariate_gaussian_logp(x_t, mu, cov)
     return logp
 
@@ -398,3 +401,26 @@ def generate_driven_Langevin_propagators():
     kernel_ratio_calculator = driven_Langevin_log_proposal_ratio
 
     return kernel_propagator, kernel_ratio_calculator
+
+def driven_mu_cov(b, f, theta, dt):
+    """
+    compute the twisted mean and covariance matrix of twisting parameters
+
+    arguments
+        b : jnp.array(N)
+            twisting vector
+        f : jnp.array(N)
+            push vector
+        theta : jnp.array(N,N)
+            twist matrix
+        dt : float
+            time increment
+    returns
+        mu : jnp.array(N)
+            twisted mean
+        cov : jnp.array(N,N)
+            twisted covariance matrix
+    """
+    mu = jnp.matmul(theta, f - dt*b)
+    cov = dt*theta
+    return mu, cov

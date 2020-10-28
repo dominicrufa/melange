@@ -3,7 +3,7 @@ smc managers
 """
 from jax import random, jit
 from jax import numpy as jnp
-from jax.lax import stop_gradient, scan, cond
+from jax.lax import stop_gradient, scan, cond, map
 from jax.scipy.special import logsumexp
 import numpy as np
 from melange.reporters import BaseSMCReporter
@@ -77,8 +77,7 @@ def SMC(prop_params, model_params, y, rs, init_params, prop_fn, logW_fn, init_fn
     #initialize
     rs, init_rs = random.split(rs) #split the rs
     X0 = init_Xs_fn(prop_params, init_rs, init_params) #initialize N Xs with the random seed and the propagation parameters
-    potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts = prop_params #split the prop params
-    init_logWs = init_logW_fn(X0, prop_params) #initialize the logWs
+    init_logWs = init_logW_fn(X0, init_params, prop_params) #initialize the logWs
     logZ = 0. #initialize the logZ
     X = X0 #set X to the init positions
     N = len(init_logWs)
@@ -126,7 +125,7 @@ def SIS(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_f
     Xs = generate_trajs(prop_params, model_params, y, rs, init_params, init_Xs_fn, prop_fn)
 
     #make cum weight matrix
-    logWs = SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn)
+    logWs = SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn)
 
     return Xs, logWs
 
@@ -142,7 +141,7 @@ def vSIS_lower_bound(prop_params, model_params, y,  rs, init_params, prop_fn, lo
     Xs = generate_trajs(prop_params, model_params, y, rs, init_params, init_Xs_fn, prop_fn)
 
     #make cum weight matrix
-    logWs = SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn)
+    logWs = SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn)
     N = logWs.shape[1]
 
     return logsumexp(logWs[-1,:]) - jnp.log(N)
@@ -166,12 +165,11 @@ def generate_trajs(prop_params, model_params, y, rs, init_params, init_X_fn, pro
     _, Xs = scan(scanner, (X0, rs), jnp.arange(1,T))
     return jnp.vstack((X0[jnp.newaxis, ...], Xs))
 
-def SIS_logW(Xs, prop_params, model_params, y, logW_fn, init_logW_fn):
+def SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn):
     """compute the logW of an ensemble of SIS trajectories"""
     T,N,Dx = Xs.shape
-    potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts = prop_params
 
-    init_logWs = init_logW_fn(Xs[0], prop_params)
+    init_logWs = init_logW_fn(Xs[0], init_params, prop_params)
     def scanner(none, t):
         Xp, Xc = Xs[t-1], Xs[t]
         return None, logW_fn(t, Xp, Xc, y, prop_params, model_params)

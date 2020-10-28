@@ -19,14 +19,13 @@ def test_ULA_SIS():
     pot, (mu, cov), dG = get_nondefault_potential_initializer(1)
     smc_obj= StaticULA(N, potential=pot, forward_potential=pot, backward_potential=pot)
     prop, logw, inits = smc_obj.get_fns()
-
     potential_params = jnp.linspace(0,1,T)[..., jnp.newaxis]
-    forward_potential_params = potential_params
-    backward_potential_params = potential_params[1:]
-    forward_dts = 1e-2*jnp.ones(T)
-    backward_dts=1e-2*jnp.ones(T)
-
-    prop_params = (potential_params, forward_potential_params, backward_potential_params, forward_dts, backward_dts)
+    prop_params = {'potential_params': potential_params,
+                   'forward_potential_params': potential_params,
+                   'backward_potential_params': potential_params[1:],
+                   'dt': 1e-2
+                   }
+    init_params = {'mu': mu, 'cov': cov}
     model_params=None
     y=jnp.zeros(T)
     rs = random.PRNGKey(10)
@@ -39,8 +38,8 @@ def test_ULA_SIS():
 
     for i in range(100):
         rs, run_rs, run_aux_rs = random.split(rs, 3)
-        SIS_logZ =jSIS(prop_params, model_params, y,  run_rs, (mu, cov), prop, logw, inits)
-        SMC_logZ = jSMC(prop_params, model_params, y,  run_aux_rs, (mu, cov), prop, logw, inits)
+        SIS_logZ =jSIS(prop_params, model_params, y, run_rs, init_params, prop, logw, inits)
+        SMC_logZ = jSMC(prop_params, model_params, y, run_aux_rs, init_params, prop, logw, inits)
         SIS_logZs.append(SIS_logZ)
         SMC_logZs.append(SMC_logZ)
 
