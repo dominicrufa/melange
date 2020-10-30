@@ -75,4 +75,4 @@ class StaticULA(BaseSMCObject):
         return init_logWs
 
     def get_fns(self, gradable_initializer=False):
-        return (self.sim_prop_fn(), self.log_weights_fn(), (self.initialize_Xs_fn(), self.initialize_logW_fn(gradable_initializer)))
+        return (self.sim_prop_fn(), self.log_weights_fn(), (self.initialize_Xs_fn(), self.initialize_logW_fn(gradable_initializer=gradable_initializer)))

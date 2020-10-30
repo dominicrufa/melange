@@ -153,8 +153,9 @@ def log_Euler_Maruyma_kernel(x_tm1, x_t, potential, potential_parameters, dt):
         logp : float
             the log probability of the kernel
     """
+    from jax.scipy.stats import multivariate_normal as mvn
     mu, cov = EL_mu_sigma(x_tm1, potential, dt, potential_parameters)
-    logp = multivariate_gaussian_logp(x_t, mu, cov)
+    logp = mvn.logpdf(x_t, mu, cov)
     return logp
 
 def log_driven_Langevin_kernel(x_tm1, x_t, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter):
@@ -184,9 +185,10 @@ def log_driven_Langevin_kernel(x_tm1, x_t, potential, dt, A_function, b_function
         logp : float
             log probability
     """
+    from jax.scipy.stats import multivariate_normal as mvn
     A, b, f, theta = driven_Langevin_parameters(x_tm1, potential, dt, A_function, b_function, potential_parameter, A_parameter, b_parameter)
     mu, cov = driven_mu_cov(b, f, theta, dt)
-    logp = multivariate_gaussian_logp(x_t, mu, cov)
+    logp = mvn.logpdf(x_t, mu, cov)
     return logp
 
 

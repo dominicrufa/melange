@@ -77,7 +77,7 @@ def get_twisted_gmm(mix_weights, mus, covs, A, b):
     from melange.miscellaneous import exp_normalize
     num_mixtures, dim = mus.shape
     sigma_tildes = map(lambda x: jnp.linalg.inv(jnp.linalg.inv(x) + 2.*A), covs)
-    log_zetas = jnp.array([-0.5 * jnp.linalg.det(cov) + 0.5 * jnp.linalg.det(sigma_tilde) + 0.5 * square_mahalanobis(jnp.matmul(jnp.linalg.inv(cov), mu), b, sigma_tilde) - 0.5 * square_mahalanobis(mu, jnp.zeros(dim), jnp.linalg.inv(cov)) for mu, cov, sigma_tilde in zip(mus, covs, sigma_tildes)])
+    log_zetas = jnp.array([-0.5 * jnp.log(jnp.linalg.det(cov)) + 0.5 * jnp.log(jnp.linalg.det(sigma_tilde)) + 0.5 * square_mahalanobis(jnp.matmul(jnp.linalg.inv(cov), mu), b, sigma_tilde) - 0.5 * square_mahalanobis(mu, jnp.zeros(dim), jnp.linalg.inv(cov)) for mu, cov, sigma_tilde in zip(mus, covs, sigma_tildes)])
     log_alpha_zetas = jnp.log(mix_weights) + log_zetas
     log_normalizer = logsumexp(log_alpha_zetas)
     log_alpha_tildes = log_alpha_zetas - log_normalizer
@@ -106,7 +106,6 @@ def sample_gmm(key, weights, mus, covs):
             sampled value
     """
     mix_key, normal_key = random.split(key)
-    assert jnp.isclose(weights.sum(), 1.)
     mixture_idx = random.choice(mix_key, len(weights), p=weights)
     return mixture_idx, random.multivariate_normal(key = normal_key, mean = mus[mixture_idx], cov = covs[mixture_idx])
 
@@ -130,5 +129,5 @@ def logK_ints(b, f, theta, dt):
         logK_int : float
             twisted kernel integral
     """
-    logK_int = 0.5*jnp.linalg.det(theta) + (0.5/dt)*square_mahalanobis(f, dt*b, theta) - (0.5/dt)*jnp.dot(f, f)
+    logK_int = 0.5 * jnp.log(jnp.linalg.det(theta)) + (0.5/dt)*square_mahalanobis(f, dt*b, theta) - (0.5/dt)*jnp.dot(f, f)
     return logK_int
