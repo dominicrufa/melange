@@ -78,7 +78,7 @@ def log_twisted_psi_t(Xp, Xc, A_fn, b_fn, A_params, b_params):
         log_psi : float
             log of twist function
     """
-    term1 = -jnp.dot(jnp.dot(Xc, A_fn(Xc, A_params)), Xc)
+    term1 = -jnp.dot(jnp.dot(Xc, A_fn(Xp, A_params)), Xc)
     term2 = -jnp.dot(Xc, b_fn(Xp, b_params))
     return term1 + term2
 

@@ -113,7 +113,7 @@ def vSMC_lower_bound(prop_params, model_params, y,  rs, init_params, prop_fn, lo
     logZ, Xs = SMC(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns)
     return logZ
 
-def SIS(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns):
+def SIS(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_fns, aggregate_works=True):
     """
     conduct sequential importance sampling (no resampling) and return Xs, logWs
     """
@@ -125,7 +125,7 @@ def SIS(prop_params, model_params, y,  rs, init_params, prop_fn, logW_fn, init_f
     Xs = generate_trajs(prop_params, model_params, y, rs, init_params, init_Xs_fn, prop_fn)
 
     #make cum weight matrix
-    logWs = SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn)
+    logWs = SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn, aggregate_works)
 
     return Xs, logWs
 
@@ -165,7 +165,7 @@ def generate_trajs(prop_params, model_params, y, rs, init_params, init_X_fn, pro
     _, Xs = scan(scanner, (X0, rs), jnp.arange(1,T))
     return jnp.vstack((X0[jnp.newaxis, ...], Xs))
 
-def SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn):
+def SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_fn, aggregate_works=True):
     """compute the logW of an ensemble of SIS trajectories"""
     T,N,Dx = Xs.shape
 
@@ -175,4 +175,7 @@ def SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_f
         return None, logW_fn(t, Xp, Xc, y, prop_params, model_params)
 
     _, logW_matrix = scan(scanner, None, jnp.arange(1,T))
-    return jnp.cumsum(jnp.vstack((init_logWs, logW_matrix)), axis=0)
+
+    out_works = jnp.vstack((init_logWs, logW_matrix))
+
+    return cond(aggregate_works, lambda x: jnp.cumsum(x, axis=0), lambda x: x, out_works)
