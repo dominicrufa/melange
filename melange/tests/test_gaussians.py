@@ -4,6 +4,8 @@ test melange.gaussians
 from jax import random
 from melange.gaussians import *
 from scipy.stats import multivariate_normal
+import tqdm
+import numpy as np
 
 def run_multivariate_gaussian_logp(key, size):
     """
@@ -34,34 +36,17 @@ def test_multivariate_gaussian_logp(key = random.PRNGKey(0), size = 4, num_iters
         key, newkey = random.split(key)
         run_multivariate_gaussian_logp(newkey, size)
 
-def test_twisted_gmm(dim=1, rand_key = random.PRNGKey(4), mixtures=5, atol=1e-4):
+def test_Gaussian_utils(dim=5):
     """
-    simple test that will assert weights, mus, and covs are unchanged upon twisting with zero functions;
-    also asserts that the mixture weights sum to one upon a random twist.
-
-    TODO : 
-        1. there is something lossy in higher dimensions (probably a float32 issue) (fix the square mahalanobis function)
-        2. fix the offset exp normalization to avoid underflow
-        3. make covariance matrix assertions
+    this is a (trivial) test that will make sure that the manually-written (diagonal) multivariate normal logpdf calculation is close to the scipy version's
     """
-    from jax.lax import map
-    A = jnp.diag(jnp.zeros(dim))
-    b = jnp.zeros(dim)
+    #make test vars
+    for i in tqdm.trange(100):
+        x = np.random.randn(dim)
+        mean = np.random.randn(dim)
+        cov = np.diag(np.abs(np.random.randn(dim)))
 
-    rand_mixkey, rand_mukey, rand_covkey, run_key = random.split(rand_key, 4)
-    rand_mixs = random.normal(rand_mixkey, shape=(mixtures,))
-    rand_mixs = rand_mixs - min(rand_mixs)
-    rand_normal_mixs = rand_mixs / rand_mixs.sum()
-    rand_mus = random.normal(rand_mukey, shape=(mixtures, dim))
-    rand_covs = random.normal(rand_covkey, shape=(mixtures, dim, dim))
-    rand_covs = map(lambda x: jnp.dot(x, x.transpose()), rand_covs)
-    #print(rand_covs)
+        mvn_logp = multivariate_normal.logpdf(x, mean, cov)
+        manual_logp = unnormalized_Normal_logp(x, mean, jnp.diag(cov)) - Normal_logZ(mean, jnp.diag(cov))
 
-    log_normalizer, log_alpha_tildes, sigma_tildes, (twisted_mus, sigma_tildes) = get_twisted_gmm(rand_normal_mixs, rand_mus, rand_covs, A, b)
-    #print(log_normalizer)
-    assert jnp.isclose(jnp.exp(log_alpha_tildes).sum(), 1.), f"{jnp.exp(log_alpha_tildes).sum()}"
-    #print(twisted_mus.shape)
-    assert jnp.allclose(twisted_mus, rand_mus, atol)
-    assert jnp.allclose(sigma_tildes, rand_covs, atol)
-
-    idx, sam = sample_gmm(run_key, jnp.exp(log_alpha_tildes), twisted_mus, sigma_tildes)
+        assert np.isclose(unnormalized_Normal_logp(x, mean, jnp.diag(cov)) - Normal_logZ(mean, jnp.diag(cov)), mvn_logp)
