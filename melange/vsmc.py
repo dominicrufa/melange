@@ -6,6 +6,7 @@ from jax.scipy.special import logsumexp
 from jax.lax import scan, stop_gradient
 from jax import grad, vmap
 from jax import numpy as jnp
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def compute_log_weights(trajectories,
                         ipotential,

@@ -5,6 +5,7 @@ from jax import numpy as jnp
 from jax import scipy as jsp
 from jax import random
 from jax import vmap
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def square_mahalanobis(u,v,VI):
     """
@@ -67,7 +68,7 @@ def sample_gmm(key, weights, mus, covs):
     """
     mix_key, normal_key = random.split(key)
     mixture_idx = random.choice(mix_key, len(weights), p=weights)
-    return mixture_idx, random.multivariate_normal(key = normal_key, mean = mus[mixture_idx], cov = jnp.diag(covs[mixture_idx]))
+    return mixture_idx, gaussian_proposal(normal_key, mus[mixture_idx], covs[mixture_idx])
 
 """
 Normal-twiting utilities
@@ -112,7 +113,7 @@ def twist_log_constant(mu, cov, A, b):
     """
     term1 = -(mu/(2.*cov)).dot(mu)
     l_r_terms = mu/cov - b
-    inner = l_r_terms / (2./cov + 4*A)
+    inner = l_r_terms / (2./cov + 4.*A)
     return term1 + inner.dot(l_r_terms)
 
 def unnormalized_Normal_logp(x, mu, cov): #tested
@@ -133,3 +134,7 @@ def unnormalized_Normal_logp(x, mu, cov): #tested
     """
     delta = x-mu
     return -0.5*(delta/cov).dot(delta)
+
+def gaussian_proposal(key, mu, cov):
+    dim=len(mu)
+    return random.normal(key, shape=(dim,))*jnp.sqrt(cov) + mu

@@ -2,6 +2,7 @@
 miscellaneous utilities
 """
 from jax import numpy as jnp
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def compute_log_pdf_ratio(potential_function, parameter_tm1, parameter_t, x_tm1, x_t):
     """

@@ -5,6 +5,7 @@ from jax import numpy as jnp
 import numpy as np
 import jax
 from jax.lax import scan
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def default_potential(pos, parameter): #define the potential
     """

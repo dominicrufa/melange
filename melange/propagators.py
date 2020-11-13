@@ -4,6 +4,7 @@ dynamics propagators
 from jax import grad, vmap, jit, random
 import jax.numpy as jnp
 from melange.gaussians import *
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def EL_mu_sigma(x, potential, dt, parameters):
     """

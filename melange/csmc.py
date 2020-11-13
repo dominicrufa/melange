@@ -9,6 +9,7 @@ from jax import random
 from jax import grad, vmap, jit
 from jax.lax import map, scan, cond
 from jax.scipy.special import logsumexp
+from jax.config import config; config.update("jax_enable_x64", True)
 import logging
 
 # Instantiate logger
@@ -73,8 +74,8 @@ def base_fk_params(X, potential, dt, potential_parameters):
         cov : jnp.array(Dx)
             covariance vector
     """
-    from melange import EL_mu_sigma
-    mu, cov = EL_mu_sigma(x, potential, dt, parameters)
+    from melange.propagators import EL_mu_sigma
+    mu, cov = EL_mu_sigma(X, potential, dt, potential_parameters)
     return mu, jnp.diag(cov)
 
 def twist_scanner_fn(carry, x):
@@ -109,10 +110,13 @@ def do_param_twist(base_mu, base_cov, As, bs, get_log_normalizer):
         logZ : float
             forward kernel log normalizer
     """
-    A_b_merger = jnp.stack((As, bs), axis=1)
-    init = (base_mu, base_cov, 0., get_log_normalizer)
-    (twisted_mu, twisted_cov, log_twist_constant, out_bool), _ = scan(twist_scanner_fn, init, A_b_merger)
-    logZ = cond(get_log_normalizer, lambda x: Normal_logZ(*x), lambda x: 0., (twisted_mu, twisted_cov))
+    A_b_merger = jnp.stack((As, bs), axis=1) #combine A and b parameters to push through the
+    init = (base_mu, base_cov, 0., get_log_normalizer) #wrap an initial tuple for the scanner
+    (twisted_mu, twisted_cov, log_twist_constant, out_bool), _ = scan(twist_scanner_fn, init, A_b_merger) #run the scan
+
+    #compute a normalized forward kernel of the base gaussian:
+    base_logZ = Normal_logZ(base_mu, base_cov)
+    logZ = cond(get_log_normalizer, lambda x: Normal_logZ(*x) - base_logZ, lambda x: 0., (twisted_mu, twisted_cov)) # compute the logZ of the kernel if specified
     return twisted_mu, twisted_cov, logZ + log_twist_constant
 
 def gaussians_twist(Xp, potential, dt, potential_params, A_fn, b_fn, A_params, b_params, get_log_normalizer):
@@ -197,18 +201,23 @@ def get_twisted_gmm(mix_weights, mus, covs, A, b):
     return full_log_normalizer, log_normalized_twisted_mixtures, (twisted_mus, twisted_covs)
 
 
-"""twisting potentials"""
-log_psi_twist_A = lambda x, As: -(x*As.sum(axis=0)).dot(x)
+"""gaussian twisting potentials"""
+log_psi_twist_A = lambda x, As: -(x*(As.sum(axis=0))).dot(x)
 log_psi_twist_b = lambda x, bs: -x.dot(bs.sum(axis=0))
-log_psi_twist = lambda x, As, bs: log_psi_twist_A(x, As).sum() + log_psi_twist_b(x, bs).sum()
+log_psi_twist = lambda x, As, bs: log_psi_twist_A(x, As) + log_psi_twist_b(x, bs)
+vlog_psi_twist = vmap(log_psi_twist, in_axes=(0,0,0))
+vlog_psi_twist_mtnr = vmap(log_psi_twist, in_axes=(0,None, None))
 
 
+#########################################
+#####CSMC Classes########################
+#########################################
 
 class StaticULAControlledSMC(StaticULA):
     """
     controlled SMC handler for Static model wth an Unadjusted Langevin Algorithm
 
-    prop_params is a dict containing: ['potential_params', 'forward_potential_params', 'backward_potential_params', 'dt', 'A_params', 'b_params'];
+    prop_params is a dict containing: ['potential_params', 'forward_potential_params', 'backward_potential_params', 'dt'];
     init_params is a dict containing: ['mixture_weights', 'mus', 'covs', 'A0', 'b0']
 
     NOTE: in the future, i will generalize this to State Space models,as well
@@ -221,6 +230,7 @@ class StaticULAControlledSMC(StaticULA):
                  A_params_len,
                  b_params_len,
                  Dx,
+                 T,
                  max_twists = 10,
                  **kwargs):
         _logger.debug(f"instantiating super")
@@ -229,10 +239,17 @@ class StaticULAControlledSMC(StaticULA):
         _logger.debug(f"getting x dimension")
         self.Dx = Dx
 
+        _logger.debug(f"getting the terminal time")
+        self.T = T
+
         #define the twisting functions
         _logger.debug(f"define A, b functions")
         self.A_fn = A_fn
         self.b_fn = b_fn
+
+        #vmap the A, b functions; this is a special utility to compute As, bs of a single twist for N particle positions
+        self.vA_fn = vmap(A_fn, in_axes=(0,None))
+        self.vb_fn = vmap(b_fn, in_axes=(0,None))
 
         #define twisting iterations
         _logger.debug(f"define twisting parameters and parameter caches")
@@ -241,6 +258,9 @@ class StaticULAControlledSMC(StaticULA):
         self.A_params_cache = jnp.zeros((max_twists, A_params_len))
         self.b_params_cache = jnp.zeros((max_twists, A_params_len))
         self.A0, self.b0 = jnp.zeros(self.Dx), jnp.zeros(self.Dx)
+
+        #assert parameter lengths are the same
+        assert A_params_len == b_params_len, f"the A and b parameter lengths must be the same"
         self.A_params_len = A_params_len
         self.b_params_len = b_params_len
 
@@ -253,24 +273,22 @@ class StaticULAControlledSMC(StaticULA):
 
     def sim_prop_fn(self):
         _logger.debug(f"generating simulation propagation function")
-
-        _prop = lambda key, mu, cov: random.multivariate_normal(key, mu, cov)
-        self.vpropagator = vmap(_prop, in_axes = (0,0,0))
+        self.vpropagator = vmap(gaussian_proposal, in_axes=(0,0,0))
 
         def prop(t, Xp, y, prop_params, model_params, rs):
             N, Dx = Xp.shape #extract the number of particles and the dimension of x
             folder_rs = random.split(rs, num=N+1) #create a list of random keys
             new_rs, runner_rs = folder_rs[0], folder_rs[1:] #separate the random keys
 
-            twisted_mus, twisted_covs, _, _, _ = self.vtwist_fn(Xp,
+            twisted_mus, twisted_covs, _, _ = self.vtwist_fn(Xp,
                                                           self.forward_potential,
                                                           prop_params['dt'],
-                                                          prop_params['forward_potential_params'],
+                                                          prop_params['forward_potential_params'][t],
                                                           self.A_fn,
                                                           self.b_fn,
                                                           self.A_params_cache[:self.twisting_iteration],
                                                           self.b_params_cache[:self.twisting_iteration],
-                                                          False)
+                                                          False) # twisted_mu, twisted_cov, logZ, (As, bs)
 
 
             Xs = self.vpropagator(runner_rs, twisted_mus, twisted_covs)
@@ -291,24 +309,30 @@ class StaticULAControlledSMC(StaticULA):
                     backward_potential_params : jnp.array(T-1,S)
                     forward_dts : jnp.array(T)
                     backward_dts : jnp.array(T-1)
+
+            NOTE : need to implement a conditional here. specifically, if t == T, then we do _not_ need to compute the logK_Zs. we need only the untwisted incremental weight and the
+                twisting potential
             """
             # compute untwisted logWs
             logWs = static_ula_logW_fn(t, Xp, Xc, y, prop_params, model_params)
 
             #compute twisting logZ forward kernel and psi_twist
-            _, _, logK_Zs, As, bs = self.vtwist_fn(Xp,
+            compute_logK_Z = cond(t == self.T, lambda x: False, lambda x: True, None)
+            _, _, logK_Zs, (As, bs) = self.vtwist_fn(Xp,
                                                  self.forward_potential,
                                                  prop_params['dt'],
-                                                 prop_params['forward_potential_params'],
+                                                 prop_params['forward_potential_params'][t],
                                                  self.A_fn,
                                                  self.b_fn,
                                                  self.A_params_cache[:self.twisting_iteration],
                                                  self.b_params_cache[:self.twisting_iteration],
-                                                 True)
+                                                 compute_logK_Z)
 
             #compute twisting functions
             log_psi_ts = self.vlog_psi_twist(Xc, As, bs)
-            return logWs + logK_Zs - log_psi_ts
+
+            #build modifier
+            return logWs #+ logK_Zs - log_psi_ts
         return log_weights
 
     def initialize_Xs_fn(self):
@@ -316,7 +340,6 @@ class StaticULAControlledSMC(StaticULA):
         initialize Xs
         """
         _logger.debug(f"generating SMC variable initializer function")
-        from melange.gaussians import get_twisted_gmm, sample_gmm
         from melange.miscellaneous import exp_normalize
         self.vsample_gmm = vmap(sample_gmm, in_axes = (0, None, None, None)) # args: (key, weights, mus, covs)
 
@@ -326,32 +349,29 @@ class StaticULAControlledSMC(StaticULA):
             folder_rs = random.split(rs, self.N+1)
             rs, run_rs = folder_rs[0], folder_rs[1:]
 
-            # conduct twisted initialization
-            _, log_alpha_tildes, _, (twisted_mus, sigma_tildes) = get_twisted_gmm(init_params['mixture_weights'],
+            # conduct twisted initialization full_log_normalizer, log_normalized_twisted_mixtures, (twisted_mus, twisted_covs)
+            _, log_normalized_twisted_mixtures, (twisted_mus, twisted_covs) = get_twisted_gmm(init_params['mixture_weights'],
                                                                                   init_params['mus'],
                                                                                   init_params['covs'],
                                                                                   self.A0,
                                                                                   self.b0) #compute twisting parameters
 
-            _, Xs = self.vsample_gmm(run_rs, exp_normalize(log_alpha_tildes), twisted_mus, sigma_tildes)
+            _, Xs = self.vsample_gmm(run_rs, exp_normalize(log_normalized_twisted_mixtures), twisted_mus, twisted_covs)
             return Xs
         return init_xs
 
     def initialize_logW_fn(self, **kwargs):
         _logger.debug(f"generating SMC log weight initializer function")
-        from melange.gaussians import get_twisted_gmm
 
         def init_logWs(X, init_params, prop_params):
-            log_normalizer, _, _, _ = get_twisted_gmm(init_params['mixture_weights'],
-                                                      init_params['mus'],
-                                                      init_params['covs'],
-                                                      self.A0,
-                                                      self.b0) #compute twisting parameters
+            log_normalizer, _, _ = get_twisted_gmm(init_params['mixture_weights'],
+                                                   init_params['mus'],
+                                                   init_params['covs'],
+                                                   self.A0,
+                                                   self.b0) #compute twisting parameters
 
             # compute twisted weights
-            log_psi0s = log_normalizer - self.vlog_psi0_twist(X,
-                                                              self.A0,
-                                                              self.b0)
+            log_psi0s = log_normalizer - vlog_psi_twist_mtnr(X, self.A0[jnp.newaxis, ...], self.b0[jnp.newaxis, ...])
 
             return log_psi0s
         return init_logWs
@@ -363,198 +383,113 @@ class StaticULAControlledSMC(StaticULA):
         """
         _logger.debug(f"generating approximate dynamic programming functions")
         from jax.ops import index, index_add, index_update
-        from jax.lax import scan
-        from jax import value_and_grad
         import tqdm
+        import numpy as np
 
-        (A_fn, b_fn) = (self.A_fn, self.b_fn) if self.twisting_iteration == 0 else (self.dummy_A_fn, self.dummy_b_fn)
-        (A_params, b_params) = (jnp.zeros((1,1,1)), jnp.zeros((1,1,1))) if self.twisting_iteration == 0 else (self.A_params_cache[:self.twisting_iteration], self.b_params_cache[:self.twisting_iteration])
-
-        if self.twisting_iteration == 0:
-            def naught_A_fn(x, params):
-                return self.base_A_fn(x, params[-1])
-            def naught_b_fn(x, params):
-                return self.base_b_fn(x, params[-1])
-            twist_A_fn, twist_b_fn = naught_A_fn, naught_b_fn
-        else:
-            twist_A_fn, twist_b_fn = self.A_fn, self.b_fn
-
-        A_params_cache = A_params
-        b_params_cache = b_params
-
-        opt_A0, opt_b0 = jnp.zeros((self.Dx, self.Dx)),  jnp.zeros(self.Dx)
-
-        def loss_t(param_dict, Xps, Xcs, Vbars):
+        def sum_square_diffs(Xcs, As, bs, V_bars):
             """
-            define a loss function for the t_th parameters;
-            the loss here is w.r.t. the twisted _base_ functions
+            compute the sum of square differences between the potential (-vlog_psi_twist) and the precomputed V_bars
             """
-            _A_params = param_dict['A_params'] # extract A
-            _b_params = param_dict['b_params'] # extract b
-            return ((-self.vlog_psi_t_twist(Xps, Xcs, self.base_A_fn, self.base_b_fn, _A_params, _b_params) - Vbars)**2).sum()
+            return ((-self.vlog_psi_twist(Xc, As, bs) - V_bars)**2.).sum()
 
-        def loss_0(param_dict, X0s, Vbars):
-            """define a loss function for the 0th parameters"""
-            _A0 = param_dict['A0'] # extract A
-            _b0 = param_dict['b0'] # extract b
-            return ((-self.vlog_psi0_twist(X0s, _A0, _b0) - Vbars)**2).sum() # (X0, A0, b0)
+        def loss(Xps, Xcs, A_params, b_params, V_bars):
+            """
+            the loss function is the sum_square_diffs explicitly parameterized by A_params, b_params
+            """
+            As, bs = self.vA_fn(Xps, A_params), self.vb_fn(Xps, b_params)
+            return sum_square_diffs(Xcs, As, bs, V_bars)
 
-        #define the gradient of the loss functions: always arg 0
-        grad_loss_t = value_and_grad(loss_t)
-        grad_loss_0 = value_and_grad(loss_0)
+        def scipy_loss(A_b_params, Xps, Xcs, V_bars):
+            """
+            rewrite the loss function s.t. it is amenable to scipy.optimize.minimize library
+            """
+            A_params, b_params = A_b_params[0,:], A_b_params[1,:]
+            return loss(Xps, Xcs, A_params, b_params, V_bars)
 
-        def optimize(loss_and_grad_fn, loss_and_grad_fn_args, optimization_steps, lr_dict):
-            """define the optimizer function for the t_th paramters"""
-            def scanner(carry_param_dict, t):
-                loss, loss_grad = loss_and_grad_fn(carry_param_dict, *loss_and_grad_fn_args[1:])
-                for key, val in loss_grad.items():
-                    carry_param_dict[key] = carry_param_dict[key] - val*lr_dict[key]
-                return carry_param_dict, loss
+        def t0_scipy_loss(A0_b0, Xcs, V_bars):
+            """
+            the scipy loss function for the t=0 twisting iteration is slightly different since we need not compute a tensor of As, bs.
+            the twisting A0, b0 arrays are specified _exclusively_ as x-independent and parameter-independent arrays
+            """
+            A0, b0 = A0_b0[0], A0_b0[1]
+            return ((-vlog_psi_twist_mtnr(Xcs, A0[np.newaxis, ...], b0[np.newaxis, ...]) - V_bars)**2).sum()
 
-            out_param_dict, losses = scan(scanner, loss_and_grad_fn_args[0], jnp.arange(optimization_steps))
-            return out_param_dict, losses
+
 
         def ADP(Xs,
-                rs,
                 logWs,
                 prop_params,
-                init_params,
-                opt_steps,
-                learning_rates_t={'A_params': 1e-5, 'b_params': 1e-5},
-                learning_rates_0={'A0': 1e-5, 'b0': 1e-5},
-                randomization_scale=1e-2):
+                minimizer_params = {
+                                    'method': 'L-BFGS-B',
+                                    'options': {'disp':True}
+                                    }
+                ):
             """
             conduct ADP
+
+            WARNING : this function CANNOT be jit'd
             """
+            from scipy.optimize import minimize #import the optimizer
+
+            #internal consistencies
             T, N = logWs.shape #get the number of steps and particles
-            rs, A_rs, b_rs = random.split(rs, 3)
+            assert T == self.T
+            assert N == self.N
 
-            A_params_to_opt = jnp.zeros((T, self.A_params_len))
-            b_params_to_opt = jnp.zeros((T, self.b_params_len))
+            out_A_params = np.zeros((T, self.A_params_len))
+            out_b_params = np.zeros((T, self.b_params_len))
 
-            #define container
-            losses = jnp.zeros((T, opt_steps))
-
-            #define the initial loss:
-            init_losses = jnp.zeros(T)
+            #make a reporter array
+            loss_reporter_container = np.zeros((T, 2)) #for each time, we report the initial loss and final loss
 
             logK_int_twist = jnp.zeros(N) #initialize the logK_twist_T+1
 
-            print(f"iterating backward...")
+            _logger.debug(f"iterating backward...")
             for t in tqdm.tqdm(jnp.arange(1,T)[::-1]): #do ADP backward
                 Vbar_t = -logWs[t] - logK_int_twist #define the Vbar_ts
                 init_loss = (Vbar_t**2).sum()
-                print(f"t: {t}; initial loss: {init_loss}")
-                init_losses = index_update(init_losses, index[t], init_loss)
-                opt_param_dict, losses_t = optimize(loss_and_grad_fn = grad_loss_t,
-                                                  loss_and_grad_fn_args = (
-                                                                              {'A_params': A_params_to_opt[t],
-                                                                               'b_params': b_params_to_opt[t]},
-                                                                              Xs[t-1],
-                                                                              Xs[t],
-                                                                              Vbar_t
-                                                                          ),
-                                                  optimization_steps=opt_steps,
-                                                  lr_dict = learning_rates_t
-                                                 )
-                print(f"optimized parameters: {opt_param_dict}")
+                loss_reporter_container[t,0] = init_loss
 
-                A_params_to_opt = index_update(A_params_to_opt, index[t, :], opt_param_dict['A_params']) #update A params
-                b_params_to_opt = index_update(b_params_to_opt, index[t, :], opt_param_dict['b_params']) # update b params
-                losses = index_update(losses, index[t,:], losses_t) #update losses
-
-                #aggregate the parameters
-                _twist_A_params = jnp.vstack((A_params_cache[:,t,:], opt_param_dict['A_params'][jnp.newaxis, ...]))
-                _twist_b_params = jnp.vstack((b_params_cache[:,t,:], opt_param_dict['b_params'][jnp.newaxis, ...]))
-                assert len(list(_twist_A_params.shape)) == 2
-                print(f"twisting A params: {_twist_A_params}")
-                print(f"twist b params: {_twist_b_params}")
-
+                x0 = np.zeros((2, self.A_params_len))
+                out_containter = minimize(scipy_loss, x0 = x0, **minimizer_params)
+                assert out_containter['success'], f"iteration {t} failed with message {out_containter['message']}" #TODO : make this fail safe
+                new_A_params, new_b_params = out_containter['x'][0,:], out_containter['x'][1,:]
+                final_loss = out_containter['fun']
+                out_A_params[t,:] = new_A_params
+                out_b_params[t,:] = new_b_params
+                loss_reporter_container[t,1] = final_loss
 
                 #compute the logK twisting integrals for the next optimization step
-                _, bs, fs, thetas = self.vdrive_params(Xs[t-1], # get the previous positions
-                                                   self.forward_potential, # get the forward potential
-                                                   prop_params['dt'], #get the dt parameter
-                                                   twist_A_fn, #A function
-                                                   twist_b_fn, #b function
-                                                   prop_params['forward_potential_params'][t], #forward potential parameters at time t
-                                                   _twist_A_params,
-                                                   _twist_b_params
-                                                 )
-                logK_int_twist = self.vlogK_ints(bs, fs, thetas, prop_params['dt']) #calculate the twistin
+                _, _, logK_int_twist, _ = self.vtwist_fn(Xs[t-1],
+                                                     self.forward_potential,
+                                                     prop_params['dt'],
+                                                     prop_params['forward_potential_params'][t],
+                                                     self.A_fn,
+                                                     self.b_fn,
+                                                     jnp.vstack((self.A_params_cache[:self.twisting_iteration], jnp.asarray(new_A_params))),
+                                                     jnp.vstack((self.b_params_cache[:self.twisting_iteration], jnp.asarray(new_b_params))),
+                                                     True)
 
             #now to do the 0th time twist
+            _logger.debug(f"conducting t=0 twist...")
             Vbar0 = -logWs[0] - logK_int_twist #compute the Vbars
-            init_losses = index_update(init_losses, index[0], (Vbar0**2).sum())
-            opt_param_dict, losses_0 = optimize(loss_and_grad_fn = grad_loss_0,
-                                                  loss_and_grad_fn_args= (
-                                                                          {'A0': opt_A0,
-                                                                           'b0': opt_b0},
-                                                                          Xs[0],
-                                                                          Vbar0
-                                                                         ),
-                                                  optimization_steps = opt_steps,
-                                                  lr_dict = learning_rates_0
-                                                 )
-            # pull out the optimized parameter
-            out_A0 = opt_param_dict['A0']
-            out_b0 = opt_param_dict['b0']
-            losses = index_update(losses, index[0,:], losses_0) #update losses
+            loss_reporter_container[0,0] = (Vbar_0**2).sum()
+            x0 = np.zeros((2, self.Dx))
+            out_containter = minimize(t0_scipy_loss, x0 = x0, **minimizer_params)
+            assert out_containter['success'], f"iteration 0 failed with message {out_containter['message']}" #TODO : make this fail safe
+            new_A0, new_b0 = out_containter['x'][0,:], out_containter['x'][1,:]
+            final_loss = out_containter['fun']
+            loss_reporter_container[0,1] = final_loss
+
+            _logger.debug(f"finished optimizations")
 
             # package the new parameters
-            new_params = {'A0': out_A0, 'b0': out_b0, 'A_params': A_params_to_opt, 'b_params': b_params_to_opt}
+            output = {'losses': loss_reporter_container,
+                      'out_A_params': out_A_params,
+                      'out_b_params': out_b_params,
+                      'out_A0': new_A0,
+                      'out_b0': new_b0}
 
-            return new_params, losses, init_losses
+            return output
 
-        return (loss_0, loss_t), (grad_loss_0, grad_loss_t), optimize, ADP
-
-    def get_fn_scanner(self):
-        def scan_fn(carry, param_stack):
-            xs, base_fn = carry
-            return (xs, base_fn), base_fn(xs, param_stack)
-        return scan_fn
-
-    def update_twist(self, opt_params):
-        """update the twist"""
-        from jax.ops import index, index_add, index_update
-        from jax.lax import scan, map
-        from functools import partial
-
-
-        #pull the optimized parameters
-        A_T, A_dim = opt_params['A_params'].shape
-        b_T, b_dim = opt_params['b_params'].shape
-
-        assert A_T == b_T
-        assert A_dim == self.A_params_len
-        assert b_dim == self.b_params_len
-        T = A_T
-
-        if self.twisting_iteration == 0:
-            self.A_params_cache = jnp.zeros((self.max_twists, T, A_dim))
-            self.b_params_cache = jnp.zeros((self.max_twists, T, b_dim))
-
-        # update parameter cache
-        self.A_params_cache = index_update(self.A_params_cache, index[self.twisting_iteration, :, :], opt_params['A_params']) #update A params
-        self.b_params_cache = index_update(self.b_params_cache, index[self.twisting_iteration, :, :], opt_params['b_params']) #update A params
-
-        # update functions
-        run_A_fn = self.base_A_fn
-        run_b_fn = self.base_b_fn
-
-        def new_A_fn(x, parameters):
-            partial_A = partial(run_A_fn, x)
-            outs = map(partial_A, parameters)
-            return outs.sum(0)
-        def new_b_fn(x, parameters):
-            partial_b = partial(run_b_fn, x)
-            outs = map(partial_b, parameters)
-            return outs.sum(0)
-
-        self.A_fn = new_A_fn
-        self.b_fn = new_b_fn
-
-        self.A0 = opt_params['A0']
-        self.b0 = opt_params['b0']
-
-        self.twisting_iteration += 1
+        return {'utilities': (sum_square_diffs, loss, scipy_loss, t0_scipy_loss), 'ADP': ADP}

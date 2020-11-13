@@ -5,6 +5,7 @@ from jax import random, grad, jit
 from jax.scipy.special import logsumexp
 from jax import numpy as jnp
 from jax import jit
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def test_ULA_SIS():
     """

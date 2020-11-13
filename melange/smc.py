@@ -8,6 +8,7 @@ from jax.scipy.special import logsumexp
 import numpy as np
 from melange.reporters import BaseSMCReporter
 import jax
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def resampling(w, rs):
     """

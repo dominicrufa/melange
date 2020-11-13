@@ -3,6 +3,7 @@ some neural network utilities that i lifted from jax
 """
 from jax import numpy as jnp
 import jax
+from jax.config import config; config.update("jax_enable_x64", True)
 
 # A helper function to randomly initialize weights and biases
 # for a dense neural network layer

@@ -5,6 +5,7 @@ from jax import numpy as jnp
 from jax import random, vmap, grad
 import numpy as np
 from jax.lax import stop_gradient
+from jax.config import config; config.update("jax_enable_x64", True)
 
 class BaseSMCObject(object):
     """

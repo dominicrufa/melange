@@ -6,6 +6,7 @@ from melange.gaussians import *
 from scipy.stats import multivariate_normal
 import tqdm
 import numpy as np
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def run_multivariate_gaussian_logp(key, size):
     """

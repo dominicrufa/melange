@@ -8,6 +8,7 @@ from melange.propagators import *
 from melange.tests.utils import checker_function, get_nondefault_potential_initializer
 import tqdm
 import numpy as np
+from jax.config import config; config.update("jax_enable_x64", True)
 
 def test_1D_ULA_propagator(key = random.PRNGKey(0), num_runs=1000):
     """
