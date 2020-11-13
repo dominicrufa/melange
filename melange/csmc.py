@@ -438,6 +438,8 @@ class StaticULAControlledSMC(StaticULA):
             """
             conduct ADP
 
+            ISSUE : there is a discrepancy between the initial value of the loss function (scipy_loss) when computed inside/outside the scipy's minimize function.
+
             WARNING : this function CANNOT be jit'd
             """
             from scipy.optimize import minimize #import the optimizer
