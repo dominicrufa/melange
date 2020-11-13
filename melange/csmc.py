@@ -332,7 +332,7 @@ class StaticULAControlledSMC(StaticULA):
             log_psi_ts = self.vlog_psi_twist(Xc, As, bs)
 
             #build modifier
-            return logWs #+ logK_Zs - log_psi_ts
+            return logWs + logK_Zs - log_psi_ts
         return log_weights
 
     def initialize_Xs_fn(self):
@@ -390,7 +390,7 @@ class StaticULAControlledSMC(StaticULA):
             """
             compute the sum of square differences between the potential (-vlog_psi_twist) and the precomputed V_bars
             """
-            return ((-self.vlog_psi_twist(Xc, As, bs) - V_bars)**2.).sum()
+            return ((-self.vlog_psi_twist(Xcs, As, bs) - V_bars)**2.).sum()
 
         def loss(Xps, Xcs, A_params, b_params, V_bars):
             """
@@ -403,7 +403,7 @@ class StaticULAControlledSMC(StaticULA):
             """
             rewrite the loss function s.t. it is amenable to scipy.optimize.minimize library
             """
-            A_params, b_params = A_b_params[0,:], A_b_params[1,:]
+            A_params, b_params = A_b_params[:self.A_params_len], A_b_params[self.A_params_len:]
             return loss(Xps, Xcs, A_params, b_params, V_bars)
 
         def t0_scipy_loss(A0_b0, Xcs, V_bars):
@@ -411,8 +411,18 @@ class StaticULAControlledSMC(StaticULA):
             the scipy loss function for the t=0 twisting iteration is slightly different since we need not compute a tensor of As, bs.
             the twisting A0, b0 arrays are specified _exclusively_ as x-independent and parameter-independent arrays
             """
-            A0, b0 = A0_b0[0], A0_b0[1]
+            A0, b0 = A0_b0[:self.Dx], A0_b0[self.Dx:]
             return ((-vlog_psi_twist_mtnr(Xcs, A0[np.newaxis, ...], b0[np.newaxis, ...]) - V_bars)**2).sum()
+
+        def get_callback_fn(Xps, Xcs, V_bars):
+            loss_logger = []
+            partial_scipy_loss = partial(scipy_loss, Xps=Xps, Xcs=Xcs, V_bars=V_bars)
+            def callback(xk):
+                val=partial_scipy_loss(xk)
+                loss_logger.append(val)
+            return loss_logger, callback
+
+
 
 
 
@@ -422,7 +432,8 @@ class StaticULAControlledSMC(StaticULA):
                 minimizer_params = {
                                     'method': 'L-BFGS-B',
                                     'options': {'disp':True}
-                                    }
+                                    },
+                verbose=False
                 ):
             """
             conduct ADP
@@ -438,6 +449,7 @@ class StaticULAControlledSMC(StaticULA):
 
             out_A_params = np.zeros((T, self.A_params_len))
             out_b_params = np.zeros((T, self.b_params_len))
+            loss_trace=[]
 
             #make a reporter array
             loss_reporter_container = np.zeros((T, 2)) #for each time, we report the initial loss and final loss
@@ -450,10 +462,21 @@ class StaticULAControlledSMC(StaticULA):
                 init_loss = (Vbar_t**2).sum()
                 loss_reporter_container[t,0] = init_loss
 
-                x0 = np.zeros((2, self.A_params_len))
-                out_containter = minimize(scipy_loss, x0 = x0, **minimizer_params)
+                x0 = np.zeros((2, self.A_params_len)).flatten() # TODO : assertion that A, b params have to same size
+                # TODO : do we have to flatten an array as first argument to minimizer
+                if verbose:
+                    loss_logger, callback_fn = get_callback_fn(Xs[t-1], Xs[t], Vbar_t)
+                out_containter = minimize(scipy_loss,
+                                          x0 = x0, #initial parameters
+                                          args = (Xs[t-1], Xs[t], Vbar_t), #other args
+                                          callback=callback_fn,
+                                          **minimizer_params)
+                _logger.debug(f"minimizer message: {out_containter['message']}")
+                if verbose:
+                    loss_trace.append(loss_logger)
                 assert out_containter['success'], f"iteration {t} failed with message {out_containter['message']}" #TODO : make this fail safe
-                new_A_params, new_b_params = out_containter['x'][0,:], out_containter['x'][1,:]
+                reshaped_out_x = out_containter['x'].reshape(2,self.A_params_len)
+                new_A_params, new_b_params = reshaped_out_x[0,:], reshaped_out_x[1,:]
                 final_loss = out_containter['fun']
                 out_A_params[t,:] = new_A_params
                 out_b_params[t,:] = new_b_params
@@ -473,11 +496,16 @@ class StaticULAControlledSMC(StaticULA):
             #now to do the 0th time twist
             _logger.debug(f"conducting t=0 twist...")
             Vbar0 = -logWs[0] - logK_int_twist #compute the Vbars
-            loss_reporter_container[0,0] = (Vbar_0**2).sum()
-            x0 = np.zeros((2, self.Dx))
-            out_containter = minimize(t0_scipy_loss, x0 = x0, **minimizer_params)
+            loss_reporter_container[0,0] = (Vbar0**2).sum()
+            x0 = np.zeros((2, self.Dx)).flatten()
+            # TODO : do we have to flatten an array as first argument to minimizer
+            out_containter = minimize(t0_scipy_loss,
+                                      x0 = x0,
+                                      args = (Xs[0], Vbar0),
+                                      **minimizer_params)
             assert out_containter['success'], f"iteration 0 failed with message {out_containter['message']}" #TODO : make this fail safe
-            new_A0, new_b0 = out_containter['x'][0,:], out_containter['x'][1,:]
+            reshaped_out_x = out_containter['x'].reshape(2,self.Dx)
+            new_A0, new_b0 = reshaped_out_x[0,:], reshaped_out_x[1,:]
             final_loss = out_containter['fun']
             loss_reporter_container[0,1] = final_loss
 
@@ -488,8 +516,22 @@ class StaticULAControlledSMC(StaticULA):
                       'out_A_params': out_A_params,
                       'out_b_params': out_b_params,
                       'out_A0': new_A0,
-                      'out_b0': new_b0}
+                      'out_b0': new_b0,
+                      'loss_trace': loss_trace}
 
             return output
 
         return {'utilities': (sum_square_diffs, loss, scipy_loss, t0_scipy_loss), 'ADP': ADP}
+
+    def update_cSMC(self, new_A_params, new_b_params, new_A0, new_b0):
+        """
+        update the instance with the new twisting parameters and initial parameters
+        """
+        _logger.debug(f"updating cSMC with new parameters")
+        #make sure that the input parameters are compatible with those of the class
+        assert new_A_params.shape == (self.T, self.A_params_len)
+        assert new_b_params.shape == (self.T, self.b_params_len)
+        assert new_A0.shape == (self.Dx,)
+        assert new_b0.shape == (self.Dx,)
+
+        #
