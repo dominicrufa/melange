@@ -201,13 +201,94 @@ def get_twisted_gmm(mix_weights, mus, covs, A, b):
     return full_log_normalizer, log_normalized_twisted_mixtures, (twisted_mus, twisted_covs)
 
 
-"""gaussian twisting potentials"""
-log_psi_twist_A = lambda x, As: -(x*(As.sum(axis=0))).dot(x)
-log_psi_twist_b = lambda x, bs: -x.dot(bs.sum(axis=0))
-log_psi_twist = lambda x, As, bs: log_psi_twist_A(x, As) + log_psi_twist_b(x, bs)
-vlog_psi_twist = vmap(log_psi_twist, in_axes=(0,0,0))
-vlog_psi_twist_mtnr = vmap(log_psi_twist, in_axes=(0,None, None))
+"""
+gaussian twisting potentials
 
+log_psi_twist_A and log_psi_twist_b are
+"""
+def log_psi_twist_A(x, As):
+    """
+    compute the log twisted potential of the A values
+    arguments
+        x : jnp.array(Dx)
+            position
+        As : jnp.array(Q, Dx)
+            Q covariance twisting matrices
+
+    returns
+        out : float
+            negative square mahalonobis distance
+    """
+    return -(x*(As.sum(axis=0))).dot(x)
+
+def log_psi_twist_b(x, bs):
+    """
+    compute the log twisted potential of the b values
+
+    arguments
+        x : jnp.array(Dx)
+            position
+        bs : jnp.array(Q, Dx)
+            Q mean twisting vector
+
+    returns
+        out : float
+            twisted b potential
+    """
+    return -x.dot(bs.sum(axis=0))
+
+def log_psi_twist(x, As, bs):
+    """
+    compute the full log twist
+
+    arguments
+        x : jnp.array(Dx)
+            position
+        As : jnp.array(Q, Dx)
+            Q mean twisting matrices (diagonal)
+        bs : jnp.array(Q, Dx)
+            Q mean twisting vector
+
+    return
+        out : float
+            full twist
+    """
+    return log_psi_twist_A(x, As) + log_psi_twist_b(x, bs)
+
+"""
+define a vlog_psi_twist to vectorize all of the log_psi_twist inputs
+
+    arguments
+        xs : jnp.array(N, Dx)
+            vectorized positions
+        N_As : jnp.array(N, Q, Dx)
+            vectorized covariance twists
+        N_bs : jnp.array(N, Q, Dx)
+            vectorized twisting vectors
+    return
+        out : jnp.array(N)
+"""
+vlog_psi_twist = vmap(log_psi_twist, in_axes=(0,0,0))
+
+#this util is not used directly
+vlog_psi_twist_util = vmap(log_psi_twist, in_axes=(0,None, None))
+
+def vlog_psi_twist_single(xs, A, b):
+    """
+    do a twist on N different positions with a single A and b vector
+
+    arguments
+        xs : jnp.array(N, Dx)
+            vectorized positions
+        A : jnp.array(Dx)
+            vectorized covariance twists
+        b : jnp.array(Dx)
+            vectorized twisting vectors
+    return
+        out : jnp.array(N)
+
+    """
+    return vlog_psi_twist_util(xs, A[jnp.newaxis, ...], b[jnp.newaxis, ...])
 
 #########################################
 #####CSMC Classes########################
@@ -371,7 +452,7 @@ class StaticULAControlledSMC(StaticULA):
                                                    self.b0) #compute twisting parameters
 
             # compute twisted weights
-            log_psi0s = log_normalizer - vlog_psi_twist_mtnr(X, self.A0[jnp.newaxis, ...], self.b0[jnp.newaxis, ...])
+            log_psi0s = log_normalizer - vlog_psi_twist_single(X, self.A0, self.b0)
 
             return log_psi0s
         return init_logWs
@@ -422,8 +503,15 @@ class StaticULAControlledSMC(StaticULA):
                 loss_logger.append(val)
             return loss_logger, callback
 
+        #jax wrapper
+        scipy_loss_grad = grad(scipy_loss, argnums=(0,))
+        t0_scipy_loss_grad = grad(t0_scipy_loss, argnums=(0,))
 
-
+        #to numpy wrapper
+        def np_scipy_loss(A_b_params, Xps, Xcs, V_bars): return float(scipy_loss(A_b_params, Xps, Xcs, V_bars))
+        def np_t0_scipy_loss(A0_b0, Xcs, V_bars): return float(t0_scipy_loss(A0_b0, Xcs, V_bars))
+        def np_scipy_loss_grad(A_b_params, Xps, Xcs, V_bars): return np.array(scipy_loss_grad(A_b_params, Xps, Xcs, V_bars), dtype=np.float64)
+        def np_t0_scipy_loss_grad(A0_b0, Xcs, V_bars): return np.array(t0_scipy_loss_grad(A0_b0, Xcs, V_bars), dtype=np.float64)
 
 
         def ADP(Xs,
@@ -461,16 +549,21 @@ class StaticULAControlledSMC(StaticULA):
             _logger.debug(f"iterating backward...")
             for t in tqdm.tqdm(jnp.arange(1,T)[::-1]): #do ADP backward
                 Vbar_t = -logWs[t] - logK_int_twist #define the Vbar_ts
-                init_loss = (Vbar_t**2).sum()
-                loss_reporter_container[t,0] = init_loss
+                x0 = jnp.zeros((2, self.A_params_len)).flatten() # TODO : assertion that A, b params have to same size
 
-                x0 = np.zeros((2, self.A_params_len)).flatten() # TODO : assertion that A, b params have to same size
                 # TODO : do we have to flatten an array as first argument to minimizer
                 if verbose:
                     loss_logger, callback_fn = get_callback_fn(Xs[t-1], Xs[t], Vbar_t)
-                out_containter = minimize(scipy_loss,
+                else:
+                    callback_fn=None
+
+                init_loss = np_scipy_loss(x0, Xs[t-1], Xs[t], Vbar_t)
+                loss_reporter_container[t,0] = init_loss
+
+                out_containter = minimize(np_scipy_loss,
                                           x0 = x0, #initial parameters
                                           args = (Xs[t-1], Xs[t], Vbar_t), #other args
+                                          jac = np_scipy_loss_grad,
                                           callback=callback_fn,
                                           **minimizer_params)
                 _logger.debug(f"minimizer message: {out_containter['message']}")
@@ -499,11 +592,12 @@ class StaticULAControlledSMC(StaticULA):
             _logger.debug(f"conducting t=0 twist...")
             Vbar0 = -logWs[0] - logK_int_twist #compute the Vbars
             loss_reporter_container[0,0] = (Vbar0**2).sum()
-            x0 = np.zeros((2, self.Dx)).flatten()
+            x0 = jnp.zeros((2, self.Dx)).flatten()
             # TODO : do we have to flatten an array as first argument to minimizer
-            out_containter = minimize(t0_scipy_loss,
+            out_containter = minimize(np_t0_scipy_loss,
                                       x0 = x0,
                                       args = (Xs[0], Vbar0),
+                                      jac = np_t0_scipy_loss_grad,
                                       **minimizer_params)
             assert out_containter['success'], f"iteration 0 failed with message {out_containter['message']}" #TODO : make this fail safe
             reshaped_out_x = out_containter['x'].reshape(2,self.Dx)
@@ -523,7 +617,9 @@ class StaticULAControlledSMC(StaticULA):
 
             return output
 
-        return {'utilities': (sum_square_diffs, loss, scipy_loss, t0_scipy_loss), 'ADP': ADP}
+        out_fns = [sum_square_diffs, loss, scipy_loss, t0_scipy_loss, get_callback_fn, scipy_loss_grad, t0_scipy_loss_grad, np_scipy_loss, np_t0_scipy_loss, np_scipy_loss_grad, np_t0_scipy_loss_grad, ADP]
+        output_fn_dict = {fn.__name__: fn for fn in out_fns}
+        return output_fn_dict
 
     def update_cSMC(self, new_A_params, new_b_params, new_A0, new_b0):
         """
