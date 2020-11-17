@@ -4,6 +4,7 @@ smc objects and utilities for controlled SMC
 from melange.smc_objects import StaticULA
 from melange.gaussians import *
 import jax.numpy as jnp
+from jax import ops
 from functools import partial
 from jax import random
 from jax import grad, vmap, jit
@@ -696,10 +697,10 @@ class StaticULAControlledSMC(StaticULA):
 
             # package the new parameters
             output = {
-                      'out_A_params': out_A_params[1:],
-                      'out_b_params': out_b_params[1:],
-                      'out_A0': new_A0,
-                      'out_b0': new_b0,
+                      'out_A_params': jnp.asarray(out_A_params[1:]),
+                      'out_b_params': jnp.asarray(out_b_params[1:]),
+                      'out_A0': jnp.asarray(new_A0),
+                      'out_b0': jnp.asarray(new_b0),
                       'loss_trace': loss_trace[::-1]
                       }
 
@@ -719,16 +720,16 @@ class StaticULAControlledSMC(StaticULA):
         """
         _logger.debug(f"updating cSMC with new parameters")
         #make sure that the input parameters are compatible with those of the class
-        assert new_A_params.shape == (self.T, self.A_params_len)
-        assert new_b_params.shape == (self.T, self.b_params_len)
+        assert new_A_params.shape == (self.T-1, self.A_params_len)
+        assert new_b_params.shape == (self.T-1, self.b_params_len)
         assert new_A0.shape == (self.Dx,)
         assert new_b0.shape == (self.Dx,)
 
         #catalogue the parameters
         catalogue_index = self.twisting_iteration-1
         _logger.debug(f"cacheing parameters at index {catalogue_index}")
-        self.A_params_cache[catalogue_index] = new_A_params
-        self.b_params_cache[catalogue_index] = new_b_params
+        self.A_params_cache = ops.index_update(self.A_params_cache, ops.index[catalogue_index,1:,:], new_A_params)
+        self.b_params_cache = ops.index_update(self.b_params_cache, ops.index[catalogue_index,1:,:], new_b_params)
         self.A0 = new_A0
         self.b0 = new_b0
 
