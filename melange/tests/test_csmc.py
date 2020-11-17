@@ -128,7 +128,7 @@ def test_log_psi_twist(dim=3, num_twists=5):
     """
     test the log_psi_twist function
     """
-    x = np.random.rand(dim)
+    x = np.random.randn(dim)
     As = np.random.randn(num_twists, dim)
     bs = np.random.randn(num_twists, dim)
 
@@ -143,7 +143,7 @@ def test_vlog_psi_twist_single(num_particles = 10, dim=3):
     """
     test the vlog_psi_twist_single function
     """
-    xs = jnp.array(np.random.rand(num_particles, dim))
+    xs = jnp.array(np.random.randn(num_particles, dim))
     A = jnp.array(np.random.randn(dim))
     b = jnp.array(np.random.randn(dim))
 

@@ -336,8 +336,8 @@ class StaticULAControlledSMC(StaticULA):
         _logger.debug(f"define twisting parameters and parameter caches")
         self.twisting_iteration = 1
         self.max_twists = max_twists
-        self.A_params_cache = jnp.zeros((max_twists, A_params_len))
-        self.b_params_cache = jnp.zeros((max_twists, A_params_len))
+        self.A_params_cache = jnp.zeros((max_twists, T, A_params_len))
+        self.b_params_cache = jnp.zeros((max_twists, T, A_params_len))
         self.A0, self.b0 = jnp.zeros(self.Dx), jnp.zeros(self.Dx)
 
         #assert parameter lengths are the same
@@ -367,8 +367,8 @@ class StaticULAControlledSMC(StaticULA):
                                                           prop_params['forward_potential_params'][t],
                                                           self.A_fn,
                                                           self.b_fn,
-                                                          self.A_params_cache[:self.twisting_iteration],
-                                                          self.b_params_cache[:self.twisting_iteration],
+                                                          self.A_params_cache[:self.twisting_iteration,t],
+                                                          self.b_params_cache[:self.twisting_iteration,t],
                                                           False) # twisted_mu, twisted_cov, logZ, (As, bs)
 
 
@@ -405,8 +405,8 @@ class StaticULAControlledSMC(StaticULA):
                                                  prop_params['forward_potential_params'][t],
                                                  self.A_fn,
                                                  self.b_fn,
-                                                 self.A_params_cache[:self.twisting_iteration],
-                                                 self.b_params_cache[:self.twisting_iteration],
+                                                 self.A_params_cache[:self.twisting_iteration,t],
+                                                 self.b_params_cache[:self.twisting_iteration,t],
                                                  compute_logK_Z)
 
             #compute twisting functions
@@ -470,12 +470,50 @@ class StaticULAControlledSMC(StaticULA):
         def sum_square_diffs(Xcs, As, bs, V_bars):
             """
             compute the sum of square differences between the potential (-vlog_psi_twist) and the precomputed V_bars
+
+            arguments
+                Xcs : jnp.array(N, Dx)
+                    current positions
+                As : jnp.array(N, Dx)
+                    A twists
+                bs : jnp.array(N, Dx)
+                    b twists
+                V_bars : jnp.array(N)
+                    previously-computed potentials
+
+            returns
+                out : float
+                    sum of square differences
+
+            NOTE : vlog_psi_twist takes As, bs of dim (N, Q, Dx), but the As, bs have dim (N, Dx);
+                    since we are summing over Q=1, we have to expand the dimension of the As, bs at axis 1
             """
-            return ((-self.vlog_psi_twist(Xcs, As, bs) - V_bars)**2.).sum()
+            return (
+                    (-self.vlog_psi_twist(Xcs,
+                                          jnp.expand_dims(As, axis=1),
+                                          jnp.expand_dims(bs, axis=1)
+                                          )
+                        - V_bars)**2.).sum()
 
         def loss(Xps, Xcs, A_params, b_params, V_bars):
             """
             the loss function is the sum_square_diffs explicitly parameterized by A_params, b_params
+
+            arguments
+                Xps : jnp.array(N, Dx)
+                    previous positions
+                Xcs : jnp.array(N, Dx)
+                    current positions
+                A_params : jnp.array(Q)
+                    parameters to pass to the A twisting function
+                b_params : jnp.array(Q)
+                    parameters to pass to the b twisting function
+                V_bars : jnp.array(N)
+                    previously-computed potentials
+
+            returns
+                out : float
+                    sum of square differences
             """
             As, bs = self.vA_fn(Xps, A_params), self.vb_fn(Xps, b_params)
             return sum_square_diffs(Xcs, As, bs, V_bars)
@@ -483,6 +521,16 @@ class StaticULAControlledSMC(StaticULA):
         def scipy_loss(A_b_params, Xps, Xcs, V_bars):
             """
             rewrite the loss function s.t. it is amenable to scipy.optimize.minimize library
+
+            arguments
+                A_b_params : jnp.array(Q + R)
+                    flattened A, b parameter inputs where Q is the dimension of A params and R is dimension of R params
+
+                see above functions for redundant arguments
+
+            returns
+                out : float
+                    loss
             """
             A_params, b_params = A_b_params[:self.A_params_len], A_b_params[self.A_params_len:]
             return loss(Xps, Xcs, A_params, b_params, V_bars)
@@ -491,27 +539,59 @@ class StaticULAControlledSMC(StaticULA):
             """
             the scipy loss function for the t=0 twisting iteration is slightly different since we need not compute a tensor of As, bs.
             the twisting A0, b0 arrays are specified _exclusively_ as x-independent and parameter-independent arrays
+
+            arguments
+                A0_b0 : jnp.array(2*Dx)
+                    flattened A0, b0 input parameters
+
+                see above functions for redundant arguments
+
+            returns
+                out : float
+                    loss
             """
             A0, b0 = A0_b0[:self.Dx], A0_b0[self.Dx:]
-            return ((-vlog_psi_twist_mtnr(Xcs, A0[np.newaxis, ...], b0[np.newaxis, ...]) - V_bars)**2).sum()
+            return ((-vlog_psi_twist_single(Xcs, A0, b0) - V_bars)**2).sum()
 
-        def get_callback_fn(Xps, Xcs, V_bars):
+        def get_callback_fn(Xps, Xcs, V_bars, t0=False):
+            """
+            utility to retrieve a callback function to pass to the scipy.optimize.minimize function for the purpose of logging outputs
+
+            arguments
+                see above functions for redundant arguments
+
+            returns
+                loss_logger : list()
+                    empty list to log the losses
+                callback : fn
+                    callback function that is supposed to be passed to the scipy.optimize.minimize function
+
+            """
             loss_logger = []
-            partial_scipy_loss = partial(scipy_loss, Xps=Xps, Xcs=Xcs, V_bars=V_bars)
+            if t0:
+                partial_scipy_loss = partial(t0_scipy_loss, Xcs=Xcs, V_bars=V_bars)
+            else:
+                partial_scipy_loss = partial(scipy_loss, Xps=Xps, Xcs=Xcs, V_bars=V_bars)
+
             def callback(xk):
                 val=partial_scipy_loss(xk)
                 loss_logger.append(val)
             return loss_logger, callback
 
-        #jax wrapper
+        #jax grad wrapper
         scipy_loss_grad = grad(scipy_loss, argnums=(0,))
         t0_scipy_loss_grad = grad(t0_scipy_loss, argnums=(0,))
 
         #to numpy wrapper
-        def np_scipy_loss(A_b_params, Xps, Xcs, V_bars): return float(scipy_loss(A_b_params, Xps, Xcs, V_bars))
-        def np_t0_scipy_loss(A0_b0, Xcs, V_bars): return float(t0_scipy_loss(A0_b0, Xcs, V_bars))
-        def np_scipy_loss_grad(A_b_params, Xps, Xcs, V_bars): return np.array(scipy_loss_grad(A_b_params, Xps, Xcs, V_bars), dtype=np.float64)
-        def np_t0_scipy_loss_grad(A0_b0, Xcs, V_bars): return np.array(t0_scipy_loss_grad(A0_b0, Xcs, V_bars), dtype=np.float64)
+        # def np_scipy_loss(A_b_params, Xps, Xcs, V_bars): return float(scipy_loss(A_b_params, Xps, Xcs, V_bars))
+        # def np_t0_scipy_loss(A0_b0, Xcs, V_bars): return float(t0_scipy_loss(A0_b0, Xcs, V_bars))
+        # def np_scipy_loss_grad(A_b_params, Xps, Xcs, V_bars): return np.array(scipy_loss_grad(A_b_params, Xps, Xcs, V_bars), dtype=np.float64)
+        # def np_t0_scipy_loss_grad(A0_b0, Xcs, V_bars): return np.array(t0_scipy_loss_grad(A0_b0, Xcs, V_bars), dtype=np.float64)
+
+        def np_scipy_loss(*args): return float(scipy_loss(*args))
+        def np_t0_scipy_loss(*args): return float(t0_scipy_loss(*args))
+        def np_scipy_loss_grad(*args): return np.array(scipy_loss_grad(*args), dtype=np.float64)
+        def np_t0_scipy_loss_grad(*args): return np.array(t0_scipy_loss_grad(*args), dtype=np.float64)
 
 
         def ADP(Xs,
@@ -537,45 +617,45 @@ class StaticULAControlledSMC(StaticULA):
             assert T == self.T
             assert N == self.N
 
-            out_A_params = np.zeros((T, self.A_params_len))
-            out_b_params = np.zeros((T, self.b_params_len))
-            loss_trace=[]
-
-            #make a reporter array
-            loss_reporter_container = np.zeros((T, 2)) #for each time, we report the initial loss and final loss
+            #initialize arrays as nan
+            out_A_params = np.empty((T, self.A_params_len)); out_A_params[:] = np.nan
+            out_b_params = np.empty((T, self.b_params_len)); out_b_params[:] = np.nan
+            loss_trace=[] #create a loss trace if we are verbose
 
             logK_int_twist = jnp.zeros(N) #initialize the logK_twist_T+1
 
             _logger.debug(f"iterating backward...")
             for t in tqdm.tqdm(jnp.arange(1,T)[::-1]): #do ADP backward
                 Vbar_t = -logWs[t] - logK_int_twist #define the Vbar_ts
-                x0 = jnp.zeros((2, self.A_params_len)).flatten() # TODO : assertion that A, b params have to same size
 
                 # TODO : do we have to flatten an array as first argument to minimizer
+                runner_args = (Xs[t-1], Xs[t], Vbar_t) #other arguments passed to minimizer
                 if verbose:
-                    loss_logger, callback_fn = get_callback_fn(Xs[t-1], Xs[t], Vbar_t)
+                    #generally, the loss loggers do not have consistent number of minimization steps at each iteration
+                    #so it is just an empty list
+                    loss_logger, callback_fn = get_callback_fn(*runner_args)
                 else:
                     callback_fn=None
 
-                init_loss = np_scipy_loss(x0, Xs[t-1], Xs[t], Vbar_t)
-                loss_reporter_container[t,0] = init_loss
-
-                out_containter = minimize(np_scipy_loss,
-                                          x0 = x0, #initial parameters
-                                          args = (Xs[t-1], Xs[t], Vbar_t), #other args
+                out_containter = minimize(np_scipy_loss, #at time t, we use the generic np scipy loss function
+                                          x0 = jnp.zeros((2, self.A_params_len)).flatten(), #initial parameters
+                                          args = runner_args, #other args
                                           jac = np_scipy_loss_grad,
                                           callback=callback_fn,
                                           **minimizer_params)
-                _logger.debug(f"minimizer message: {out_containter['message']}")
+
                 if verbose:
-                    loss_trace.append(loss_logger)
+                    _logger.debug(f"minimizer message: {out_containter['message']}")
+                    loss_trace.append(np.array(loss_logger))
                 assert out_containter['success'], f"iteration {t} failed with message {out_containter['message']}" #TODO : make this fail safe
-                reshaped_out_x = out_containter['x'].reshape(2,self.A_params_len)
+
+                #extract the output parameters
+                reshaped_out_x = out_containter['x'].reshape(2,self.A_params_len) #check to make sure this is reshaped properly
                 new_A_params, new_b_params = reshaped_out_x[0,:], reshaped_out_x[1,:]
-                final_loss = out_containter['fun']
+
+                #record the parameters
                 out_A_params[t,:] = new_A_params
                 out_b_params[t,:] = new_b_params
-                loss_reporter_container[t,1] = final_loss
 
                 #compute the logK twisting integrals for the next optimization step
                 _, _, logK_int_twist, _ = self.vtwist_fn(Xs[t-1],
@@ -584,36 +664,44 @@ class StaticULAControlledSMC(StaticULA):
                                                      prop_params['forward_potential_params'][t],
                                                      self.A_fn,
                                                      self.b_fn,
-                                                     jnp.vstack((self.A_params_cache[:self.twisting_iteration], jnp.asarray(new_A_params))),
-                                                     jnp.vstack((self.b_params_cache[:self.twisting_iteration], jnp.asarray(new_b_params))),
+                                                     jnp.vstack((self.A_params_cache[:self.twisting_iteration,t], jnp.asarray(new_A_params))),
+                                                     jnp.vstack((self.b_params_cache[:self.twisting_iteration,t], jnp.asarray(new_b_params))),
                                                      True)
 
             #now to do the 0th time twist
             _logger.debug(f"conducting t=0 twist...")
             Vbar0 = -logWs[0] - logK_int_twist #compute the Vbars
-            loss_reporter_container[0,0] = (Vbar0**2).sum()
-            x0 = jnp.zeros((2, self.Dx)).flatten()
             # TODO : do we have to flatten an array as first argument to minimizer
+
+            runner_args = (None, Xs[0], Vbar0) #other arguments passed to minimizer
+            if verbose:
+                loss_logger, callback_fn = get_callback_fn(*runner_args, t0=True)
+            else:
+                callback_fn=None
+
             out_containter = minimize(np_t0_scipy_loss,
-                                      x0 = x0,
-                                      args = (Xs[0], Vbar0),
+                                      x0 = jnp.zeros((2, self.Dx)).flatten(),
+                                      args = runner_args[1:], #we cannot pass 'None'
                                       jac = np_t0_scipy_loss_grad,
+                                      callback=callback_fn,
                                       **minimizer_params)
+            if verbose:
+                _logger.debug(f"minimizer message: {out_containter['message']}")
+                loss_trace.append(np.array(loss_logger))
             assert out_containter['success'], f"iteration 0 failed with message {out_containter['message']}" #TODO : make this fail safe
             reshaped_out_x = out_containter['x'].reshape(2,self.Dx)
             new_A0, new_b0 = reshaped_out_x[0,:], reshaped_out_x[1,:]
-            final_loss = out_containter['fun']
-            loss_reporter_container[0,1] = final_loss
 
-            _logger.debug(f"finished optimizations")
+            _logger.debug(f"finished optimizations; terminating...")
 
             # package the new parameters
-            output = {'losses': loss_reporter_container,
-                      'out_A_params': out_A_params,
-                      'out_b_params': out_b_params,
+            output = {
+                      'out_A_params': out_A_params[1:],
+                      'out_b_params': out_b_params[1:],
                       'out_A0': new_A0,
                       'out_b0': new_b0,
-                      'loss_trace': loss_trace}
+                      'loss_trace': loss_trace[::-1]
+                      }
 
             return output
 
@@ -621,7 +709,11 @@ class StaticULAControlledSMC(StaticULA):
         output_fn_dict = {fn.__name__: fn for fn in out_fns}
         return output_fn_dict
 
-    def update_cSMC(self, new_A_params, new_b_params, new_A0, new_b0):
+    def update_cSMC(self,
+                    new_A_params,
+                    new_b_params,
+                    new_A0,
+                    new_b0):
         """
         update the instance with the new twisting parameters and initial parameters
         """
@@ -632,4 +724,13 @@ class StaticULAControlledSMC(StaticULA):
         assert new_A0.shape == (self.Dx,)
         assert new_b0.shape == (self.Dx,)
 
-        #
+        #catalogue the parameters
+        catalogue_index = self.twisting_iteration-1
+        _logger.debug(f"cacheing parameters at index {catalogue_index}")
+        self.A_params_cache[catalogue_index] = new_A_params
+        self.b_params_cache[catalogue_index] = new_b_params
+        self.A0 = new_A0
+        self.b0 = new_b0
+
+        #then update the twisting iteration
+        self.twisting_iteration += 1
