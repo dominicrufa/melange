@@ -75,7 +75,9 @@ def simple_nnpotential_generator(base_potential, nn_potential, base_potential_pa
 
     shapes = [(w.shape, b.shape) for w,b in nn_potential_param_list]
     def out_nnpotential(x, parameter):
-        base_e_param, nn_param = parameter[:base_potential_parameter_length], parameter[base_potential_parameter_length:]
+        base_scale_param, nn_scale_param=parameter[:2]
+        aux_params = parameter[2:]
+        base_e_param, nn_param = aux_params[:base_potential_parameter_length], aux_params[base_potential_parameter_length:]
 
         #resolve the base param
         base_e = base_potential(x, base_e_param)
@@ -93,11 +95,11 @@ def simple_nnpotential_generator(base_potential, nn_potential, base_potential_pa
 
         #call the nn_potential
         nn_e = nn_potential(x, nn_param_list)
-        return nn_e + base_e
+        return nn_scale_param*nn_e + base_scale_param*base_e
 
     return out_nnpotential
 
-def sigmoid_nn_potential(pos, parameter):
+def convolution_nn_potential(pos, parameter, activation=jax.nn.sigmoid):
     """
     make a simple, fully-connected
     arguments
@@ -118,5 +120,5 @@ def sigmoid_nn_potential(pos, parameter):
         w,b = parameter[i]
         dotter = jnp.dot(w, act)
         outs = dotter + b
-        act = jax.nn.sigmoid(outs) - 0.5
+        act = activation(outs)
     return act.sum()
