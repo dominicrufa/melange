@@ -7,6 +7,7 @@ from jax.lax import stop_gradient, scan, cond, map
 from jax.scipy.special import logsumexp
 import numpy as np
 from melange.reporters import BaseSMCReporter
+import tqdm
 import jax
 from jax.config import config; config.update("jax_enable_x64", True)
 
@@ -180,3 +181,26 @@ def SIS_logW(Xs, prop_params, model_params, y, init_params, logW_fn, init_logW_f
     out_works = jnp.vstack((init_logWs, logW_matrix))
 
     return cond(aggregate_works, lambda x: jnp.cumsum(x, axis=0), lambda x: x, out_works)
+
+def bootstrap_logZ(incremental_work_array, num_bootstraps=1000):
+    """
+    bootstrap resample the logZ estimate
+
+    arguments
+        incremental_work_array : np.array(T,N)
+            work array (unaggregated)
+        num_bootstraps : int, default 1000
+            number of bootstraps to conduct
+
+    returns
+        bootstraps : np.array(num_bootstraps)
+            logZ estimates
+    """
+    T, N = incremental_work_array.shape
+    final_works = np.cumsum(incremental_work_array, axis=0)[-1]
+    bootstraps = np.zeros(num_bootstraps)
+    for i in tqdm.trange(num_bootstraps):
+        _works = np.random.choice(final_works, size=N, replace=True)
+        logZ = logsumexp(_works) - np.log(N)
+        bootstraps[i] = logZ
+    return bootstraps

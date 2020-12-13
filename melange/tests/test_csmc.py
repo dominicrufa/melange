@@ -124,6 +124,37 @@ def test_null_do_param_twist(dim=3, num_twists=5, scale=1e3):
 
         assert np.isclose(log_normalizer, 0.), f"{log_normalizer}"
 
+def test_log_psi_twist(dim=3, num_twists=5):
+    """
+    test the log_psi_twist function
+    """
+    x = np.random.randn(dim)
+    As = np.random.randn(num_twists, dim)
+    bs = np.random.randn(num_twists, dim)
+
+    out = log_psi_twist(x, As, bs)
+    assert type(out) == np.float64
+
+    #manual
+    outs_manual = np.array([np.dot(x*A, x) + np.dot(x,b) for A,b in zip(As, bs)])
+    assert np.isclose(-outs_manual.sum(), out)
+
+def test_vlog_psi_twist_single(num_particles = 10, dim=3):
+    """
+    test the vlog_psi_twist_single function
+    """
+    xs = jnp.array(np.random.randn(num_particles, dim))
+    A = jnp.array(np.random.randn(dim))
+    b = jnp.array(np.random.randn(dim))
+
+    out_twists = vlog_psi_twist_single(xs, A, b)
+
+    #manual
+    manual_outs = np.array([log_psi_twist(x, A[jnp.newaxis, ...], b[jnp.newaxis]) for x in xs])
+
+    #make the assertions of isclose
+    assert np.allclose(out_twists, manual_outs)
+
 def test_uncontrolled_csmc(dim=1):
     """
     test a vanilla implementation of uncontrolled sequential monte carlo of a static model with an Euler Maruyama forward/backward kernel.
